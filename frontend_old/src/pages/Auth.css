@@ -1,0 +1,73 @@
+.auth-container {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.auth-card {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2rem;
+  border-radius: 10px;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(12px);
+  width: 100%;
+  max-width: 400px;
+}
+
+.auth-card h1 {
+  margin-bottom: 1.5rem;
+  color: var(--text);
+  text-align: center;
+}
+
+.error-message {
+  background: rgba(255, 104, 117, 0.08);
+  color: #ff9da7;
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 104, 117, 0.35);
+  margin-bottom: 1rem;
+}
+
+button[type='submit'] {
+  width: 100%;
+  padding: 0.75rem;
+  background: linear-gradient(135deg, rgba(113, 230, 255, 0.22), rgba(123, 92, 255, 0.25));
+  color: var(--text);
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+button[type='submit']:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+button[type='submit']:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.toggle-auth {
+  margin-top: 1.5rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.toggle-auth button {
+  background: none;
+  border: none;
+  color: #71e6ff;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0;
+}
+
+.toggle-auth button:hover {
+  text-decoration: underline;
+}

@@ -1,0 +1,322 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-900: #040814;
+  --bg-800: #0a1226;
+  --bg-700: #0f1830;
+  --card: rgba(14, 21, 40, 0.7);
+  --stroke: rgba(255, 255, 255, 0.08);
+  --accent: #71e6ff;
+  --accent-2: #7b5cff;
+  --text: #e6edff;
+  --muted: #9fb5d6;
+  --surface-1: rgba(255, 255, 255, 0.04);
+  --surface-2: rgba(255, 255, 255, 0.03);
+  --surface-3: rgba(255, 255, 255, 0.02);
+  --card-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  --card-shadow-soft: 0 12px 30px rgba(0, 0, 0, 0.3);
+  --glass-blur: 10px;
+  --panel-radius: 12px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Space Grotesk', 'SF Pro Display', 'SF Pro Text', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: radial-gradient(circle at 20% 20%, rgba(113, 230, 255, 0.08), transparent 25%),
+    radial-gradient(circle at 80% 10%, rgba(123, 92, 255, 0.1), transparent 20%),
+    var(--bg-900);
+  color: var(--text);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Shared glass surfaces so page files can stay lean */
+.glass-card {
+  background: var(--surface-1);
+  border: 1px solid var(--stroke);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--card-shadow);
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.glass-card-soft {
+  background: var(--surface-2);
+  border: 1px solid var(--stroke);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--card-shadow-soft);
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+/* Global header/navigation styling for all pages */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  background: linear-gradient(120deg, rgba(113, 230, 255, 0.08), rgba(123, 92, 255, 0.08));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+  margin: 0 auto 1.5rem;
+  max-width: 1600px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--text);
+}
+
+.nav-btn,
+.logout-btn {
+  border: 1px solid var(--stroke);
+  background: linear-gradient(135deg, rgba(113, 230, 255, 0.2), rgba(123, 92, 255, 0.18));
+  color: var(--text);
+  padding: 0.55rem 1rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.nav-btn:hover,
+.logout-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px rgba(113, 230, 255, 0.25);
+  border-color: rgba(113, 230, 255, 0.4);
+}
+
+.logout-btn {
+  background: linear-gradient(135deg, rgba(255, 104, 117, 0.2), rgba(255, 255, 255, 0.08));
+}
+
+/* Shared page background shell */
+.page-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: radial-gradient(circle at 20% 20%, rgba(113, 230, 255, 0.04), transparent 22%),
+    radial-gradient(circle at 80% 15%, rgba(123, 92, 255, 0.07), transparent 25%),
+    var(--bg-900);
+}
+
+.page-shell .bg-grid,
+.page-shell .bg-lines,
+.page-shell .bg-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.page-shell .bg-grid {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px;
+  opacity: 0.25;
+  animation: drift 40s linear infinite;
+}
+
+.page-shell .bg-lines {
+  background: linear-gradient(120deg, rgba(113, 230, 255, 0.12), rgba(123, 92, 255, 0));
+  mask-image: radial-gradient(circle at 30% 30%, black 0%, transparent 60%);
+  opacity: 0.3;
+}
+
+.page-shell .bg-glow {
+  filter: blur(80px);
+  opacity: 0.5;
+}
+
+.page-shell .glow-1 {
+  background: radial-gradient(circle at 20% 30%, rgba(113, 230, 255, 0.4), transparent 40%);
+}
+
+.page-shell .glow-2 {
+  background: radial-gradient(circle at 80% 10%, rgba(123, 92, 255, 0.35), transparent 40%);
+}
+
+.page-shell .glow-3 {
+  background: radial-gradient(circle at 60% 80%, rgba(113, 230, 255, 0.2), transparent 30%);
+}
+
+.news-container,
+.competition-container,
+.profile-container,
+.post-detail-container,
+.activity-history-container,
+.auth-container {
+  position: relative;
+  min-height: 100vh;
+  color: var(--text);
+}
+
+.news-container::before,
+.competition-container::before,
+.profile-container::before,
+.post-detail-container::before,
+.activity-history-container::before,
+.auth-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px;
+  opacity: 0.25;
+  animation: drift 40s linear infinite;
+  pointer-events: none;
+}
+
+.news-container > *,
+.competition-container > *,
+.profile-container > *,
+.post-detail-container > *,
+.activity-history-container > *,
+.auth-container > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes drift {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(40px);
+  }
+}
+
+/* Global modal + form theming for consistency */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(4, 8, 20, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(6px);
+}
+
+.modal-content {
+  background: rgba(10, 18, 38, 0.9);
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  padding: 1.5rem;
+  width: 90%;
+  max-width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+
+.modal-content h2,
+.modal-content h3 {
+  margin: 0 0 1rem 0;
+  color: var(--text);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.form-group input,
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 1rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: rgba(113, 230, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(113, 230, 255, 0.08);
+}
+
+.form-group input:disabled,
+.form-group textarea:disabled,
+.form-group select:disabled {
+  background: rgba(255, 255, 255, 0.04);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.primary-btn,
+.secondary-btn,
+.submit-btn,
+.cancel-btn,
+.confirm-btn,
+.cancel-btn-small {
+  padding: 0.6rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  background: linear-gradient(135deg, rgba(113, 230, 255, 0.22), rgba(123, 92, 255, 0.25));
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.secondary-btn,
+.cancel-btn,
+.cancel-btn-small {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.primary-btn:hover,
+.secondary-btn:hover,
+.submit-btn:hover,
+.cancel-btn:hover,
+.confirm-btn:hover,
+.cancel-btn-small:hover {
+  transform: translateY(-1px);
+  border-color: rgba(113, 230, 255, 0.4);
+  box-shadow: 0 10px 25px rgba(113, 230, 255, 0.15);
+}
