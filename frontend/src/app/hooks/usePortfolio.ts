@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useState } from "react";
-import { useStockQuotes } from "./useStockQuotes";
+import { useStockQuotes, fetchPeriodChangePercent } from "./useStockQuotes";
 import { useAuth } from "@/app/context/AuthContext";
 import { fetchPortfolioSummary } from "@/app/services/api";
 import { validatePortfolioData } from "@/app/utils/dataAudit";
@@ -77,6 +77,31 @@ export function usePortfolio() {
   // Get stock quotes for the symbols in the portfolio
   const symbolsToFetch = backendHoldings.map((h) => h.symbol);
   const { quotes, lastUpdatedAt } = useStockQuotes(symbolsToFetch);
+  const [periodChanges, setPeriodChanges] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    if (symbolsToFetch.length === 0) return;
+    (async () => {
+      try {
+        const results = await Promise.all(
+          symbolsToFetch.map((s) => fetchPeriodChangePercent(s)),
+        );
+        if (cancelled) return;
+        const map: Record<string, number> = {};
+        symbolsToFetch.forEach((s, i) => {
+          const v = results[i];
+          if (typeof v === "number") map[s] = v;
+        });
+        setPeriodChanges(map);
+      } catch (err) {
+        if (!cancelled) setPeriodChanges({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [symbolsToFetch.join(",")]);
 
   const result = useMemo(() => {
     const holdings: Holding[] = backendHoldings.map((h) => {
@@ -86,7 +111,8 @@ export function usePortfolio() {
       };
       const currentPrice = quotes[h.symbol]?.price ?? h.averageCost;
       const value = h.shares * currentPrice;
-      const changePercent = quotes[h.symbol]?.changePercent ?? 0;
+      const changePercent =
+        periodChanges[h.symbol] ?? quotes[h.symbol]?.changePercent ?? 0;
       return {
         symbol: h.symbol,
         name: metadata.name,

@@ -26,10 +26,20 @@ async function fetchQuote(
     if (token) {
       try {
         const stockPrice = await fetchStockPrice(symbol, token);
+        console.debug("useStockQuotes: backend response", symbol, stockPrice);
         const change = stockPrice.price - stockPrice.previousClose;
         const changePercent = stockPrice.previousClose
           ? (change / stockPrice.previousClose) * 100
           : 0;
+        if (!changePercent)
+          console.debug(
+            "useStockQuotes: computed backend changePercent is 0",
+            symbol,
+            {
+              price: stockPrice.price,
+              previousClose: stockPrice.previousClose,
+            },
+          );
         return { symbol, price: stockPrice.price, change, changePercent };
       } catch (error) {
         console.debug(
@@ -38,22 +48,41 @@ async function fetchQuote(
       }
     }
 
-    // Fallback to Yahoo Finance
+    // Fallback to Yahoo Finance v7 quote endpoint (returns regularMarketPrice and change percent)
     const corsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=5d&interval=1d`,
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`,
     )}`;
     const res = await fetch(corsUrl);
     if (!res.ok) return null;
     const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return null;
-    const closes = result.indicators?.quote?.[0]?.close ?? [];
-    const previousClose = result.meta?.previousClose ?? closes[0];
-    const lastClose = closes.filter((c: number | null) => c != null).pop();
-    if (lastClose == null) return null;
-    const change = lastClose - previousClose;
-    const changePercent = previousClose ? (change / previousClose) * 100 : 0;
-    return { symbol, price: lastClose, change, changePercent };
+    const quote = json?.quoteResponse?.result?.[0];
+    console.debug("useStockQuotes: yahoo v7 response", symbol, quote);
+    if (!quote) return null;
+    const price =
+      typeof quote.regularMarketPrice === "number"
+        ? quote.regularMarketPrice
+        : typeof quote.regularMarketPreviousClose === "number"
+          ? quote.regularMarketPreviousClose
+          : null;
+    const previousClose =
+      typeof quote.regularMarketPreviousClose === "number"
+        ? quote.regularMarketPreviousClose
+        : null;
+    if (price == null) return null;
+    const change = previousClose != null ? price - previousClose : 0;
+    const changePercent =
+      typeof quote.regularMarketChangePercent === "number"
+        ? quote.regularMarketChangePercent
+        : previousClose
+          ? (change / previousClose) * 100
+          : 0;
+    if (!changePercent)
+      console.debug(
+        "useStockQuotes: yahoo changePercent is 0 or missing",
+        symbol,
+        { price, previousClose, quoteChange: quote.regularMarketChangePercent },
+      );
+    return { symbol, price, change, changePercent } as StockQuote;
   } catch {
     return null;
   }
@@ -143,4 +172,51 @@ export function useStockQuotes(symbols: string[]) {
   }, []);
 
   return { quotes, loading, lastUpdatedAt };
+}
+
+export async function fetchPeriodChangePercent(
+  symbol: string,
+  range = "5d",
+  interval = "1d",
+): Promise<number | null> {
+  try {
+    const params = new URLSearchParams({ range, interval });
+    const proxyUrl = `/api/chart/v8/finance/chart/${symbol}?${params}`;
+    let res: Response;
+    try {
+      res = await fetch(proxyUrl);
+      if (!res.ok) throw new Error(`proxy ${res.status}`);
+    } catch (err) {
+      const apiUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?${params}`;
+      const corsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`;
+      res = await fetch(corsUrl);
+      if (!res.ok) return null;
+    }
+
+    const text = await res.text();
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+    const timestamps: number[] = result.timestamp ?? [];
+    const closes: Array<number | null> = result.indicators?.quote?.[0]?.close ?? [];
+    // find first and last non-null close
+    const first = closes.find((c: number | null) => c != null) ?? null;
+    const last = (() => {
+      for (let i = closes.length - 1; i >= 0; i--) {
+        if (closes[i] != null) return closes[i] as number;
+      }
+      return null;
+    })();
+    if (first == null || last == null) return null;
+    const change = last - first;
+    const changePercent = first ? (change / first) * 100 : 0;
+    return changePercent;
+  } catch (e) {
+    return null;
+  }
 }

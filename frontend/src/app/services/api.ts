@@ -125,6 +125,27 @@ export async function fetchStockPrice(
   });
 }
 
+// Fetch allowed tags for posts
+export async function fetchAllowedTags(): Promise<string[]> {
+  return apiCall<string[]>(`/api/tags`, { method: "GET" });
+}
+
+// Search symbols via backend proxy to Yahoo
+export interface SymbolSearchResult {
+  symbol: string;
+  name?: string;
+  exchange?: string;
+}
+
+export async function searchStockSymbols(
+  query: string,
+): Promise<SymbolSearchResult[]> {
+  const q = encodeURIComponent(query);
+  return apiCall<SymbolSearchResult[]>(`/api/stock/search?q=${q}`, {
+    method: "GET",
+  });
+}
+
 // ============== Auth APIs ==============
 
 export interface SignupRequest {
@@ -218,6 +239,16 @@ export async function fetchPosts(
   });
 }
 
+export interface TrendingTopic {
+  topic: string;
+  posts: number;
+  sentiment?: string;
+}
+
+export async function fetchTrendingTopics(): Promise<TrendingTopic[]> {
+  return apiCall<TrendingTopic[]>(`/api/trending_topics`, { method: "GET" });
+}
+
 export async function fetchPost(postId: number): Promise<Post> {
   return apiCall<Post>(`/api/posts/${postId}`, {
     method: "GET",
@@ -234,11 +265,23 @@ export async function createPost(
   token: string,
   data: CreatePostRequest,
 ): Promise<{ message: string; post_id: number }> {
-  return apiCall("/api/posts", {
+  const res = await apiCall("/api/posts", {
     method: "POST",
     token,
     body: JSON.stringify(data),
   });
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent("community-updated", {
+        detail: { type: "post_created", postId: res.post_id },
+      }),
+    );
+  } catch (e) {
+    // ignore (non-browser envs)
+  }
+
+  return res;
 }
 
 export async function updatePost(
@@ -246,21 +289,45 @@ export async function updatePost(
   postId: number,
   data: CreatePostRequest,
 ): Promise<{ message: string }> {
-  return apiCall(`/api/posts/${postId}`, {
+  const res = await apiCall(`/api/posts/${postId}`, {
     method: "PUT",
     token,
     body: JSON.stringify(data),
   });
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent("community-updated", {
+        detail: { type: "post_updated", postId },
+      }),
+    );
+  } catch (e) {
+    // ignore
+  }
+
+  return res;
 }
 
 export async function deletePost(
   token: string,
   postId: number,
 ): Promise<{ message: string }> {
-  return apiCall(`/api/posts/${postId}`, {
+  const res = await apiCall(`/api/posts/${postId}`, {
     method: "DELETE",
     token,
   });
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent("community-updated", {
+        detail: { type: "post_deleted", postId },
+      }),
+    );
+  } catch (e) {
+    // ignore
+  }
+
+  return res;
 }
 
 // ============== Comments APIs ==============
@@ -290,21 +357,45 @@ export async function createComment(
   postId: number,
   data: CreateCommentRequest,
 ): Promise<{ message: string; comment_id: number }> {
-  return apiCall(`/api/posts/${postId}/comments`, {
+  const res = await apiCall(`/api/posts/${postId}/comments`, {
     method: "POST",
     token,
     body: JSON.stringify(data),
   });
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent("community-updated", {
+        detail: { type: "comment_created", postId },
+      }),
+    );
+  } catch (e) {
+    // ignore
+  }
+
+  return res;
 }
 
 export async function deleteComment(
   token: string,
   commentId: number,
 ): Promise<{ message: string }> {
-  return apiCall(`/api/comments/${commentId}`, {
+  const res = await apiCall(`/api/comments/${commentId}`, {
     method: "DELETE",
     token,
   });
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent("community-updated", {
+        detail: { type: "comment_deleted", commentId },
+      }),
+    );
+  } catch (e) {
+    // ignore
+  }
+
+  return res;
 }
 
 // ============== News APIs ==============
@@ -355,5 +446,111 @@ export async function chatWithAI(
     method: "POST",
     token,
     body: JSON.stringify({ messages }),
+  });
+}
+
+// ============== Theses APIs ==============
+export interface ThesisRecord {
+  id?: number;
+  symbol: string;
+  name?: string;
+  thesis?: string;
+  entry?: number;
+  target?: number;
+  stop?: number;
+  tags?: string[];
+  status?: string;
+  last_updated?: string;
+}
+
+export async function fetchTheses(token: string): Promise<ThesisRecord[]> {
+  return apiCall<ThesisRecord[]>(`/api/theses`, {
+    method: "GET",
+    token,
+  });
+}
+
+export async function createThesis(
+  token: string,
+  data: ThesisRecord,
+): Promise<ThesisRecord> {
+  return apiCall<ThesisRecord>(`/api/theses`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateThesis(
+  token: string,
+  id: number,
+  data: Partial<ThesisRecord>,
+): Promise<ThesisRecord> {
+  return apiCall<ThesisRecord>(`/api/theses/${id}`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteThesis(
+  token: string,
+  id: number,
+): Promise<{ message: string }> {
+  return apiCall<{ message: string }>(`/api/theses/${id}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+// ============== User Settings APIs ==============
+export async function fetchUserSetting(
+  token: string,
+  key?: string,
+): Promise<any> {
+  const q = key ? `?key=${encodeURIComponent(key)}` : "";
+  return apiCall<any>(`/api/user/settings${q}`, {
+    method: "GET",
+    token,
+  });
+}
+
+export async function saveUserSetting(
+  token: string,
+  key: string,
+  value: any,
+): Promise<{ message: string }> {
+  return apiCall<{ message: string }>(`/api/user/settings`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ key, value }),
+  });
+}
+
+// ============== Watchlist APIs ==============
+export async function fetchWatchlist(token: string): Promise<string[]> {
+  return apiCall<string[]>(`/api/watchlist`, { method: "GET", token });
+}
+
+export async function addWatchlistItem(
+  token: string,
+  symbol: string,
+): Promise<{ message: string; symbol?: string }>
+{
+  return apiCall(`/api/watchlist`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ symbol }),
+  });
+}
+
+export async function deleteWatchlistItem(
+  token: string,
+  symbol: string,
+): Promise<{ message: string; symbol?: string }>
+{
+  return apiCall(`/api/watchlist/${encodeURIComponent(symbol)}`, {
+    method: "DELETE",
+    token,
   });
 }
