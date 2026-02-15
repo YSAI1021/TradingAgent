@@ -12,10 +12,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import { usePortfolio } from "@/app/hooks/usePortfolio";
-import { useEffect } from "react";
-import { fetchPosts, fetchNews } from "@/app/services/api";
+import { useEffect, useRef } from "react";
+import { fetchPosts, fetchNews, fetchUserSetting, saveUserSetting, fetchTheses } from "@/app/services/api";
+import { useAuth } from "@/app/context/AuthContext";
 import SourcesModal from "@/app/components/SourcesModal";
-import { useStockQuotes } from "@/app/hooks/useStockQuotes";
+import { useStockQuotes, fetchPeriodChangePercent } from "@/app/hooks/useStockQuotes";
 import {
   Card,
   CardHeader,
@@ -37,20 +38,103 @@ import {
 
 export function Dashboard() {
   const [actionWorkflowOpen, setActionWorkflowOpen] = useState(false);
+  const [visibleCounter, setVisibleCounter] = useState(0);
+  const hiddenAtRef = useRef<number | null>(null);
   const [selectedAction, setSelectedAction] = useState<{
     symbol: string;
     type: "success" | "warning" | "alert";
   } | null>(null);
 
-  // Dashboard tiles visibility state
-  const [visibleTiles, setVisibleTiles] = useState({
-    topMovers: true,
-    topMarketMovers: true,
-    riskExposure: true,
-    ruleTriggers: true,
+  // Dashboard tiles visibility state (persisted in localStorage or DB for logged-in users)
+  const { token, isAuthenticated } = useAuth();
+
+  const [visibleTiles, setVisibleTiles] = useState(() => {
+    try {
+      const raw = localStorage.getItem("dashboard_visible_tiles");
+      if (raw) return JSON.parse(raw);
+    } catch (e) {
+      // ignore parse errors
+    }
+    return {
+      topMovers: true,
+      topMarketMovers: true,
+      riskExposure: true,
+      ruleTriggers: true,
+      portfolioBrief: true,
+    };
   });
 
+  // Load persisted settings from server for authenticated users
+  useEffect(() => {
+    let mounted = true;
+    if (isAuthenticated && token) {
+      (async () => {
+        try {
+          const res = await fetchUserSetting(token, 'dashboard_visible_tiles');
+          if (!mounted) return;
+          // server returns either { key, value } or a full map; handle both
+          let parsed: any = null;
+          if (res && typeof res === 'object') {
+            if ('value' in res) parsed = res.value;
+            else parsed = res;
+          }
+          if (parsed) setVisibleTiles(parsed);
+        } catch (err) {
+          console.warn('Failed to load dashboard settings from server', err);
+        }
+      })()
+    }
+    return () => { mounted = false }
+  }, [isAuthenticated, token]);
+
+  // Refresh dashboard data when tab becomes visible
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAtRef.current = Date.now();
+        return;
+      }
+      if (document.visibilityState === "visible") {
+        // always reload when returning to the tab to guarantee fresh data
+        setVisibleCounter((c) => c + 1);
+        try {
+          window.location.reload();
+        } catch (e) {
+          // if reload is blocked, the counter will still trigger refreshes
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
   const { holdings, totalValue } = usePortfolio();
+
+  // Load theses from server (for Rule Triggers)
+  const [serverTheses, setServerTheses] = useState<any[] | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    if (!isAuthenticated || !token) {
+      setServerTheses(null);
+      return;
+    }
+    (async () => {
+      try {
+        const list = await fetchTheses(token);
+        if (!mounted) return;
+        setServerTheses(Array.isArray(list) ? list : []);
+      } catch (err) {
+        console.warn("Failed to load theses for dashboard", err);
+        if (mounted) setServerTheses([]);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [isAuthenticated, token, visibleCounter]);
+
+  const hasConcentrationFromTheses = (serverTheses || []).some((t) => t && (t.status === "needs-review" || t.status === "breached"));
+  const hasTargetMetFromTheses = (serverTheses || []).some((t) => t && t.status === "achieved");
 
   // Top Movers in My Portfolio: user's best 5 holdings by today's performance (highest first)
   const topMovers = useMemo(
@@ -196,7 +280,7 @@ export function Dashboard() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [visibleCounter]);
 
   const autoCandidates = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -224,19 +308,44 @@ export function Dashboard() {
     new Set([...autoCandidates, ...seedVolatile]),
   );
   const { quotes: candidateQuotes } = useStockQuotes(candidateSymbols);
+  const [candidatePeriodChanges, setCandidatePeriodChanges] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!candidateSymbols || candidateSymbols.length === 0) return;
+    (async () => {
+      try {
+        const results = await Promise.all(
+          candidateSymbols.map((s) => fetchPeriodChangePercent(s)),
+        );
+        if (cancelled) return;
+        const map: Record<string, number> = {};
+        candidateSymbols.forEach((s, i) => {
+          const v = results[i];
+          if (typeof v === "number") map[s] = v;
+        });
+        setCandidatePeriodChanges(map);
+      } catch (err) {
+        if (!cancelled) setCandidatePeriodChanges({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [candidateSymbols.join(","), visibleCounter]);
 
   const topMarketMovers = useMemo(() => {
     const holdingSymbols = new Set(holdings.map((h) => h.symbol));
     const list = Object.values(candidateQuotes)
       .filter((q) => q && !holdingSymbols.has(q.symbol))
-      .sort((a, b) => (b.changePercent ?? 0) - (a.changePercent ?? 0))
-      .slice(0, 5)
       .map((q) => ({
         symbol: q.symbol,
         name: q.symbol,
         price: q.price,
-        change: q.changePercent,
-      }));
+        change: candidatePeriodChanges[q.symbol] ?? q.changePercent ?? 0,
+      }))
+      .sort((a, b) => (b.change ?? 0) - (a.change ?? 0))
+      .slice(0, 5);
     // Fallback to seed list if quotes not ready
     if (list.length === 0)
       return seedVolatile
@@ -251,8 +360,27 @@ export function Dashboard() {
     { category: "Sector Volatility", level: "Low", value: 25 },
   ];
 
-  const toggleTile = (tile: keyof typeof visibleTiles) => {
-    setVisibleTiles((prev) => ({ ...prev, [tile]: !prev[tile] }));
+  const toggleTile = async (tile: keyof typeof visibleTiles) => {
+    setVisibleTiles((prev) => {
+      const next = { ...prev, [tile]: !prev[tile] };
+      try {
+        localStorage.setItem("dashboard_visible_tiles", JSON.stringify(next));
+      } catch (e) {
+        // ignore
+      }
+      return next;
+    });
+
+    // Persist to server when authenticated
+    try {
+      if (isAuthenticated && token) {
+        const raw = localStorage.getItem('dashboard_visible_tiles');
+        const payload = raw ? JSON.parse(raw) : null;
+        if (payload) await saveUserSetting(token, 'dashboard_visible_tiles', payload);
+      }
+    } catch (err) {
+      console.warn('Failed to save dashboard settings to server', err);
+    }
   };
 
   return (
@@ -279,11 +407,15 @@ export function Dashboard() {
               View Weekly Digest
             </Button>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm">
+              <DropdownMenuTrigger>
+                <button
+                  data-slot="button"
+                  className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all h-8 px-3"
+                  type="button"
+                >
                   <Settings className="w-4 h-4 mr-2" />
                   Customize
-                </Button>
+                </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuCheckboxItem
@@ -310,86 +442,96 @@ export function Dashboard() {
                 >
                   Rule Triggers & Alerts
                 </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={visibleTiles.portfolioBrief}
+                  onCheckedChange={() => toggleTile("portfolioBrief")}
+                >
+                  Today's Portfolio Brief
+                </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </div>
       </div>
 
-      {/* Today's Portfolio Brief - Always visible, not customizable */}
-      <Card className="mb-6 border-blue-200 bg-blue-50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-blue-900">
-            <Sparkles className="w-5 h-5" />
-            Today's Portfolio Brief
-            <Badge variant="outline" className="ml-auto bg-white/80">
-              Last updated: 2 min ago
-            </Badge>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs ml-2 text-blue-900 hover:bg-blue-100"
-              onClick={() => loadSourcesForBrief()}
-            >
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 text-blue-900">
-          {portfolioBrief.map((item, i) => (
-            <div
-              key={i}
-              className={`p-4 rounded-lg border border-blue-200 bg-white hover:border-blue-300 transition-colors border-l-4 ${riskBorderStyles[item.action]}`}
-            >
-              <p className="text-xs font-medium text-blue-700 mb-1 uppercase tracking-wide">
-                {item.section}
-              </p>
-              <div>
-                <h3 className="font-medium text-gray-900 mb-1">{item.what}</h3>
-                <p className="text-sm text-gray-600 mb-2">
-                  Why it matters: {item.why}
+      {/* Today's Portfolio Brief - user can toggle visibility via Customize */}
+      {visibleTiles.portfolioBrief && (
+        <Card className="mb-6 border-blue-200 bg-blue-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-blue-900">
+              <Sparkles className="w-5 h-5" />
+              Today's Portfolio Brief
+              <Badge variant="outline" className="ml-auto bg-white/80">
+                Last updated: 2 min ago
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs ml-2 text-blue-900 hover:bg-blue-100"
+                onClick={() => loadSourcesForBrief()}
+              >
+                <ExternalLink className="w-3 h-3 mr-1" />
+                Sources
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-blue-900">
+            {portfolioBrief.map((item, i) => (
+              <div
+                key={i}
+                className={`p-4 rounded-lg border border-blue-200 bg-white hover:border-blue-300 transition-colors border-l-4 ${riskBorderStyles[item.action]}`}
+              >
+                <p className="text-xs font-medium text-blue-700 mb-1 uppercase tracking-wide">
+                  {item.section}
                 </p>
-                <div className="flex flex-wrap gap-2 mt-3">
-                  {item.action === "success" && (
-                    <>
-                      <Badge variant="secondary" className="text-xs">
-                        AAPL
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        MSFT
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        Earnings Beat
-                      </Badge>
-                    </>
-                  )}
-                  {item.action === "warning" && (
-                    <>
-                      <Badge variant="secondary" className="text-xs">
-                        XOM
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        Energy Sector
-                      </Badge>
-                    </>
-                  )}
-                  {item.action === "alert" && (
-                    <>
-                      <Badge variant="secondary" className="text-xs">
-                        Tech Holdings
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        Diversification
-                      </Badge>
-                    </>
-                  )}
+                <div>
+                  <h3 className="font-medium text-gray-900 mb-1">
+                    {item.what}
+                  </h3>
+                  <p className="text-sm text-gray-600 mb-2">
+                    Why it matters: {item.why}
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {item.action === "success" && (
+                      <>
+                        <Badge variant="secondary" className="text-xs">
+                          AAPL
+                        </Badge>
+                        <Badge variant="secondary" className="text-xs">
+                          MSFT
+                        </Badge>
+                        <Badge variant="secondary" className="text-xs">
+                          Earnings Beat
+                        </Badge>
+                      </>
+                    )}
+                    {item.action === "warning" && (
+                      <>
+                        <Badge variant="secondary" className="text-xs">
+                          XOM
+                        </Badge>
+                        <Badge variant="secondary" className="text-xs">
+                          Energy Sector
+                        </Badge>
+                      </>
+                    )}
+                    {item.action === "alert" && (
+                      <>
+                        <Badge variant="secondary" className="text-xs">
+                          Tech Holdings
+                        </Badge>
+                        <Badge variant="secondary" className="text-xs">
+                          Diversification
+                        </Badge>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 gap-6 mb-6">
         {/* Top Movers in My Portfolio */}
@@ -578,47 +720,48 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              <div className="flex items-center justify-between p-4 rounded-lg bg-yellow-50 border border-yellow-200">
-                <div className="flex items-center gap-3">
-                  <AlertCircle className="w-5 h-5 text-yellow-600" />
-                  <div>
-                    <p className="font-medium text-gray-900">
-                      Concentration Alert
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      Tech sector exceeded 60% threshold
-                    </p>
-                  </div>
+              {(!hasConcentrationFromTheses && !hasTargetMetFromTheses) ? (
+                <div className="p-4 rounded-lg bg-white border border-gray-200 text-sm text-gray-600">
+                  No active rule triggers.
                 </div>
-                <Link to="/portfolio">
-                  <Badge
-                    variant="outline"
-                    className="cursor-pointer bg-white/95 text-gray-900 border-gray-300 hover:bg-gray-100"
-                  >
-                    View Details
-                  </Badge>
-                </Link>
-              </div>
+              ) : (
+                <>
+                  {hasConcentrationFromTheses && (
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-yellow-50 border border-yellow-200">
+                      <div className="flex items-center gap-3">
+                        <AlertCircle className="w-5 h-5 text-yellow-600" />
+                        <div>
+                          <p className="font-medium text-gray-900">Concentration Alert</p>
+                          <p className="text-sm text-gray-600">One or more theses require review or have been breached</p>
+                        </div>
+                      </div>
+                      <Link to="/portfolio">
+                        <Badge variant="outline" className="cursor-pointer bg-white/95 text-gray-900 border-gray-300 hover:bg-gray-100">View Details</Badge>
+                      </Link>
+                    </div>
+                  )}
 
-              <div className="flex items-center justify-between p-4 rounded-lg bg-green-50 border border-green-200">
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-5 h-5 text-green-600" />
-                  <div>
-                    <p className="font-medium text-gray-900">
-                      Portfolio Target Met
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      Tech holdings achieved +15% growth target
-                    </p>
-                  </div>
-                </div>
-                <Badge
-                  variant="outline"
-                  className="bg-white/95 text-gray-900 border-gray-300 hover:bg-gray-100"
-                >
-                  Consider Taking Profit
-                </Badge>
-              </div>
+                  {hasTargetMetFromTheses && (
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-green-50 border border-green-200">
+                      <div className="flex items-center gap-3">
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                        <div>
+                          <p className="font-medium text-gray-900">Portfolio Target Met</p>
+                          <p className="text-sm text-gray-600">One or more theses have reached their target</p>
+                        </div>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => {
+                        // open action workflow for first achieved thesis symbol if available
+                        const first = (serverTheses || []).find((t: any) => t && t.status === 'achieved');
+                        if (first && first.symbol) {
+                          setSelectedAction({ symbol: first.symbol, type: 'success' });
+                          setActionWorkflowOpen(true);
+                        }
+                      }}>Consider Taking Profit</Button>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </CardContent>
         </Card>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   TrendingUp,
   Sparkles,
@@ -23,6 +23,8 @@ import {
   updatePost,
   fetchPost,
   fetchUserActivity,
+  fetchAllowedTags,
+  fetchTrendingTopics,
   Post,
   Comment,
   ActivitySummary,
@@ -53,7 +55,7 @@ export function Community() {
   const [createPostOpen, setCreatePostOpen] = useState(false);
   const [postContent, setPostContent] = useState("");
   const [postTitle, setPostTitle] = useState("");
-  const [postHashtags, setPostHashtags] = useState("");
+  const [postHashtags, setPostHashtags] = useState<string[]>([]);
   const [posts, setPosts] = useState<
     Array<
       Post & {
@@ -84,9 +86,13 @@ export function Community() {
   const [editPostId, setEditPostId] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
-  const [editHashtags, setEditHashtags] = useState("");
+  const [editHashtags, setEditHashtags] = useState<string[]>([]);
+
+  const [allowedHashtags, setAllowedHashtags] = useState<string[]>([]);
+  const [tagSearch, setTagSearch] = useState("");
   const [editLoading, setEditLoading] = useState(false);
-  const [activitySummary, setActivitySummary] = useState<ActivitySummary | null>(null);
+  const [activitySummary, setActivitySummary] =
+    useState<ActivitySummary | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
 
   // Fetch posts on mount
@@ -95,10 +101,63 @@ export function Community() {
     loadPosts();
   }, [token]);
 
+  // Load allowed tags from backend
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const tags = await fetchAllowedTags();
+        if (cancelled) return;
+        setAllowedHashtags(tags || []);
+      } catch (err) {
+        console.warn("Failed to load allowed tags", err);
+        setAllowedHashtags([]);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!token) return;
     loadActivity();
   }, [token]);
+
+  // Listen for global updates from other parts of the app (posts/comments created elsewhere)
+  useEffect(() => {
+    if (!token) return;
+
+    const onCommunityUpdated = (e: Event) => {
+      try {
+        const ev = e as CustomEvent<any>;
+        // Always reload the post list and activity summary
+        loadPosts();
+        loadActivity();
+
+        // If a comment was created on an open post, refresh its comments
+        const detail = ev?.detail;
+        if (detail?.type?.includes("comment") && detail?.postId) {
+          if (commentsOpen === detail.postId) {
+            loadComments(detail.postId);
+          }
+        }
+      } catch (err) {
+        console.warn("community-updated handler error", err);
+      }
+    };
+
+    window.addEventListener(
+      "community-updated",
+      onCommunityUpdated as EventListener,
+    );
+    return () =>
+      window.removeEventListener(
+        "community-updated",
+        onCommunityUpdated as EventListener,
+      );
+  }, [token, commentsOpen]);
 
   const loadActivity = async () => {
     try {
@@ -140,22 +199,73 @@ export function Community() {
     }
   };
 
-  const trendingTopics = [
-    { topic: "AI Stocks", posts: 147, sentiment: "Bullish" },
-    { topic: "Fed Rate Decision", posts: 89, sentiment: "Mixed" },
-    { topic: "Energy Sector", posts: 62, sentiment: "Neutral" },
-    { topic: "Tech Earnings", posts: 54, sentiment: "Bullish" },
-  ];
+  const [trendingTopics, setTrendingTopics] = useState<
+    Array<{ topic: string; posts: number; sentiment?: string }>
+  >([]);
+
+  // Load trending topics from backend (top 4 stock tickers by post count)
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const t = await fetchTrendingTopics();
+        if (cancelled) return;
+        if (Array.isArray(t) && t.length > 0) {
+          setTrendingTopics(t);
+        } else {
+          setTrendingTopics([
+            { topic: "AI Stocks", posts: 0, sentiment: "Bullish" },
+            { topic: "Market News", posts: 0, sentiment: "Mixed" },
+            { topic: "Energy Sector", posts: 0 },
+            { topic: "Tech Earnings", posts: 0, sentiment: "Bullish" },
+          ]);
+        }
+      } catch (err) {
+        console.warn("Failed to load trending topics", err);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const displayedTags = useMemo(() => {
+    const q = tagSearch.trim().toLowerCase();
+    if (q) return allowedHashtags.filter((t) => t.toLowerCase().includes(q));
+
+    // Prefer trendingTopics mapped to hashtag format if available
+    if (Array.isArray(trendingTopics) && trendingTopics.length > 0) {
+      const mapped = trendingTopics
+        .map((tt) => {
+          const match = allowedHashtags.find(
+            (a) => a.replace(/^#/, "").toLowerCase() === tt.topic.toLowerCase(),
+          );
+          return match || `#${tt.topic}`;
+        })
+        .filter(Boolean);
+      // ensure uniqueness and limit to 4
+      return Array.from(new Set(mapped)).slice(0, 4);
+    }
+
+    return allowedHashtags.slice(0, 4);
+  }, [allowedHashtags, tagSearch, trendingTopics]);
+
+  // News and posts display controls
+  const [newsExpanded, setNewsExpanded] = useState(false);
+  const [postsExpanded, setPostsExpanded] = useState(false);
+
+  const newsPosts = useMemo(() => posts.filter((p) => p.is_news), [posts]);
+  const otherPosts = useMemo(() => posts.filter((p) => !p.is_news), [posts]);
 
   const handleCreatePost = async () => {
     if (!token || !postContent.trim() || !postTitle.trim()) return;
 
     setCreating(true);
     try {
-      // Extract ticker from hashtags if any (e.g., #AAPL)
-      const hashtagRegex = /#([A-Z]{1,5})/g;
-      const matches = postHashtags.match(hashtagRegex);
-      const ticker = matches ? matches[0].substring(1) : undefined;
+      // Extract ticker from selected hashtags if any (e.g., #AAPL)
+      const tickerTag = postHashtags.find((t) => /^#[A-Z]{1,5}$/.test(t));
+      const ticker = tickerTag ? tickerTag.substring(1) : undefined;
 
       await createPost(token, {
         title: postTitle,
@@ -166,7 +276,7 @@ export function Community() {
       // Reset form and reload posts
       setPostTitle("");
       setPostContent("");
-      setPostHashtags("");
+      setPostHashtags([]);
       setCreatePostOpen(false);
       await loadPosts();
     } catch (err) {
@@ -255,7 +365,7 @@ export function Community() {
     setEditPostId(post.id);
     setEditTitle(post.title);
     setEditContent(post.content);
-    setEditHashtags(post.stock_ticker ? `#${post.stock_ticker}` : "");
+    setEditHashtags(post.stock_ticker ? [`#${post.stock_ticker}`] : []);
   };
 
   const handleUpdatePost = async () => {
@@ -263,9 +373,8 @@ export function Community() {
 
     setEditLoading(true);
     try {
-      const hashtagRegex = /#([A-Z]{1,5})/g;
-      const matches = editHashtags.match(hashtagRegex);
-      const ticker = matches ? matches[0].substring(1) : undefined;
+      const tickerTag = editHashtags.find((t) => /^#[A-Z]{1,5}$/.test(t));
+      const ticker = tickerTag ? tickerTag.substring(1) : undefined;
 
       await updatePost(token, editPostId!, {
         title: editTitle,
@@ -276,7 +385,7 @@ export function Community() {
       setEditPostId(null);
       setEditTitle("");
       setEditContent("");
-      setEditHashtags("");
+      setEditHashtags([]);
       await loadPosts();
     } catch (err) {
       console.error("Error updating post:", err);
@@ -335,22 +444,43 @@ export function Community() {
               />
             </div>
             <div>
-              <Label
-                htmlFor="post-hashtags"
-                className="flex items-center gap-2"
-              >
+              <Label className="flex items-center gap-2">
                 <Hash className="w-4 h-4" />
-                Hashtags
+                Hashtags (pick from list)
               </Label>
-              <Input
-                id="post-hashtags"
-                placeholder="#AAPL #earnings #tech (space-separated)"
-                value={postHashtags}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  setPostHashtags(e.target.value)
-                }
-                className="mt-2"
-              />
+              <div className="mt-2">
+                <Input
+                  placeholder="Search tags"
+                  value={tagSearch}
+                  onChange={(e) => setTagSearch(e.target.value)}
+                  className="mb-2"
+                />
+                <div className="flex flex-wrap gap-2">
+                  {displayedTags.map((tag) => {
+                    const selected = postHashtags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          setPostHashtags((prev) =>
+                            prev.includes(tag)
+                              ? prev.filter((tt) => tt !== tag)
+                              : [...prev, tag],
+                          );
+                        }}
+                        className={`px-2 py-1 rounded text-xs border ${
+                          selected
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-gray-700 border-gray-200"
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
             {postContent && (
               <div className="p-3 bg-gray-50 rounded-lg border">
@@ -358,20 +488,13 @@ export function Community() {
                   Preview
                 </p>
                 <p className="text-sm text-gray-700">{postContent}</p>
-                {postHashtags && (
+                {postHashtags && postHashtags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-2">
-                    {postHashtags
-                      .split(/\s+/)
-                      .filter(Boolean)
-                      .map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant="secondary"
-                          className="text-xs"
-                        >
-                          {tag.startsWith("#") ? tag : `#${tag}`}
-                        </Badge>
-                      ))}
+                    {postHashtags.map((tag) => (
+                      <Badge key={tag} variant="secondary" className="text-xs">
+                        {tag}
+                      </Badge>
+                    ))}
                   </div>
                 )}
               </div>
@@ -552,190 +675,254 @@ export function Community() {
             </div>
           )}
 
-          {/* Posts List */}
-          {posts.map((post, i) => (
-            <Card
-              key={i}
-              className="hover:shadow-md transition-shadow cursor-pointer"
-            >
-              <CardContent className="pt-6">
-                {/* Author Info */}
-                <div className="flex items-center gap-3 mb-4">
-                  <Avatar>
-                    <AvatarFallback className="bg-blue-600 text-white">
-                      {post.initials}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1">
-                    <p className="font-medium text-gray-900">{post.author}</p>
-                    <p className="text-xs text-gray-500">{post.time}</p>
-                  </div>
-                </div>
-
-                {/* Post Content */}
-                <h3 className="font-semibold text-gray-900 mb-2">
-                  {post.title}
-                </h3>
-                <p className="text-sm text-gray-600 mb-3">{post.content}</p>
-
-                {/* Tags */}
-                {Array.isArray(post.tags) && post.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {post.tags.map((tag, j) => (
-                      <Badge key={j} variant="secondary" className="text-xs">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-
-                <Separator className="my-3" />
-
-                {/* Engagement - Comment, Like, Dislike */}
-                <div className="flex items-center gap-4 text-sm text-gray-500">
-                  <button
-                    onClick={() => {
-                      if (commentsOpen === post.id) {
-                        setCommentsOpen(null);
-                      } else {
-                        setCommentsOpen(post.id);
-                        if (!commentsData[post.id]) {
-                          loadComments(post.id);
-                        }
-                      }
-                    }}
-                    className="flex items-center gap-1 hover:text-blue-600 transition-colors"
-                    title="Comment"
-                  >
-                    <MessageCircle className="w-4 h-4" />
-                    <span>
-                      {commentsData[post.id]?.length ?? post.comments}
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => loadPostDetail(post.id)}
-                    className="flex items-center gap-1 hover:text-blue-600 transition-colors"
-                    title="View post details"
-                  >
-                    <Eye className="w-4 h-4" />
-                  </button>
-
-                  {/* Edit button - only show if user is post author */}
-                  {user && user.id === post.user_id && (
-                    <button
-                      onClick={() => openEditPost(post)}
-                      className="flex items-center gap-1 hover:text-blue-600 transition-colors text-gray-500"
-                      title="Edit post"
+          {/* News posts (company/news feed) */}
+          {newsPosts.length > 0 && (
+            <Card className="mb-4">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5" />
+                  Company News
+                  <Badge className="ml-auto bg-gray-100 text-gray-800">{newsPosts.length} items</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {(newsExpanded ? newsPosts : newsPosts.slice(0, 4)).map((post) => (
+                    <a
+                      key={post.id}
+                      href={post.news_url || '#'}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block p-3 rounded-lg hover:bg-gray-50 transition-colors"
                     >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                  )}
-
-                  {/* Delete button - only show if user is post author */}
-                  {user && user.id === post.user_id && (
-                    <button
-                      onClick={() => handleDeletePost(post.id)}
-                      disabled={deleting === post.id}
-                      className="ml-auto flex items-center gap-1 hover:text-red-600 transition-colors text-gray-500 disabled:opacity-50"
-                      title="Delete post"
-                    >
-                      {deleting === post.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="w-4 h-4" />
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                {/* Comments Section */}
-                {commentsOpen === post.id && (
-                  <div className="mt-4 pt-4 border-t space-y-3">
-                    {/* Loading state */}
-                    {loadingComments === post.id ? (
-                      <div className="flex items-center gap-2 text-sm text-gray-500">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Loading comments...
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-900">{post.title}</p>
+                          <p className="text-xs text-gray-500">{post.news_source || ''} • {post.news_published_at ? new Date(post.news_published_at).toLocaleString() : ''}</p>
+                        </div>
                       </div>
-                    ) : (
-                      <>
-                        {/* Comments list */}
-                        <div className="space-y-2 max-h-64 overflow-y-auto">
-                          {commentsData[post.id]?.length === 0 ? (
-                            <p className="text-xs text-gray-500">
-                              No comments yet
-                            </p>
-                          ) : (
-                            commentsData[post.id]?.map((comment) => (
-                              <div
-                                key={comment.id}
-                                className="p-2 bg-gray-50 rounded text-xs space-y-1"
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <span className="font-medium text-gray-700">
-                                    User {comment.user_id}
-                                  </span>
-                                  {user && user.id === comment.user_id && (
-                                    <button
-                                      onClick={() =>
-                                        handleDeleteComment(comment.id, post.id)
-                                      }
-                                      disabled={deletingComment === comment.id}
-                                      className="text-red-500 hover:text-red-700 disabled:opacity-50"
-                                      title="Delete comment"
-                                    >
-                                      {deletingComment === comment.id ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                      ) : (
-                                        <Trash2 className="w-3 h-3" />
-                                      )}
-                                    </button>
-                                  )}
-                                </div>
-                                <p className="text-gray-600">
-                                  {comment.content}
-                                </p>
-                                <span className="text-gray-400">
-                                  {new Date(
-                                    comment.created_at,
-                                  ).toLocaleDateString()}
-                                </span>
-                              </div>
-                            ))
-                          )}
-                        </div>
+                    </a>
+                  ))}
 
-                        {/* Add comment form */}
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            placeholder="Add a comment..."
-                            value={commentContent}
-                            onChange={(e) => setCommentContent(e.target.value)}
-                            onKeyPress={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
-                                e.preventDefault();
-                                handleAddComment(post.id);
-                              }
-                            }}
-                            className="flex-1 text-xs px-2 py-1 border border-gray-300 rounded focus:outline-none focus:border-blue-500"
-                          />
-                          <button
-                            onClick={() => handleAddComment(post.id)}
-                            disabled={!commentContent.trim()}
-                            className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                          >
-                            Post
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
+                  {newsPosts.length > 4 && (
+                    <div className="pt-2">
+                      <Button
+                        variant="default"
+                        className="border-gray-300 text-gray-900 hover:bg-gray-50"
+                        onClick={() => setNewsExpanded((v) => !v)}
+                      >
+                        {newsExpanded ? "Show less" : `Display more (${newsPosts.length - 4})`}
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
-          ))}
+          )}
+
+          {/* Posts List */}
+          {(() => {
+            const visible = postsExpanded ? otherPosts : otherPosts.slice(0, 3);
+            return (
+              <>
+                {visible.map((post) => (
+                  <Card
+                    key={post.id}
+                    className="hover:shadow-md transition-shadow cursor-pointer"
+                  >
+                    <CardContent className="pt-6">
+                      {/* Author Info */}
+                      <div className="flex items-center gap-3 mb-4">
+                        <Avatar>
+                          <AvatarFallback className="bg-blue-600 text-white">
+                            {post.initials}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">{post.author}</p>
+                          <p className="text-xs text-gray-500">{post.time}</p>
+                        </div>
+                      </div>
+
+                      {/* Post Content */}
+                      <h3 className="font-semibold text-gray-900 mb-2">
+                        {post.title}
+                      </h3>
+                      <p className="text-sm text-gray-600 mb-3">{post.content}</p>
+
+                      {/* Tags */}
+                      {Array.isArray(post.tags) && post.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {post.tags.map((tag, j) => (
+                            <Badge key={j} variant="secondary" className="text-xs">
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+
+                      <Separator className="my-3" />
+
+                      {/* Engagement - Comment, Like, Dislike */}
+                      <div className="flex items-center gap-4 text-sm text-gray-500">
+                        <button
+                          onClick={() => {
+                            if (commentsOpen === post.id) {
+                              setCommentsOpen(null);
+                            } else {
+                              setCommentsOpen(post.id);
+                              if (!commentsData[post.id]) {
+                                loadComments(post.id);
+                              }
+                            }
+                          }}
+                          className="flex items-center gap-1 hover:text-blue-600 transition-colors"
+                          title="Comment"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                          <span>
+                            {commentsData[post.id]?.length ?? post.comments}
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => loadPostDetail(post.id)}
+                          className="flex items-center gap-1 hover:text-blue-600 transition-colors"
+                          title="View post details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+
+                        {/* Edit button - only show if user is post author */}
+                        {user && user.id === post.user_id && (
+                          <button
+                            onClick={() => openEditPost(post)}
+                            className="flex items-center gap-1 hover:text-blue-600 transition-colors text-gray-500"
+                            title="Edit post"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                        )}
+
+                        {/* Delete button - only show if user is post author */}
+                        {user && user.id === post.user_id && (
+                          <button
+                            onClick={() => handleDeletePost(post.id)}
+                            disabled={deleting === post.id}
+                            className="ml-auto flex items-center gap-1 hover:text-red-600 transition-colors text-gray-500 disabled:opacity-50"
+                            title="Delete post"
+                          >
+                            {deleting === post.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Comments Section */}
+                      {commentsOpen === post.id && (
+                        <div className="mt-4 pt-4 border-t space-y-3">
+                          {/* Loading state */}
+                          {loadingComments === post.id ? (
+                            <div className="flex items-center gap-2 text-sm text-gray-500">
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              Loading comments...
+                            </div>
+                          ) : (
+                            <>
+                              {/* Comments list */}
+                              <div className="space-y-2 max-h-64 overflow-y-auto">
+                                {commentsData[post.id]?.length === 0 ? (
+                                  <p className="text-xs text-gray-500">
+                                    No comments yet
+                                  </p>
+                                ) : (
+                                  commentsData[post.id]?.map((comment) => (
+                                    <div
+                                      key={comment.id}
+                                      className="p-2 bg-gray-50 rounded text-xs space-y-1"
+                                    >
+                                      <div className="flex items-start justify-between gap-2">
+                                        <span className="font-medium text-gray-700">
+                                          User {comment.user_id}
+                                        </span>
+                                        {user && user.id === comment.user_id && (
+                                          <button
+                                            onClick={() =>
+                                              handleDeleteComment(comment.id, post.id)
+                                            }
+                                            disabled={deletingComment === comment.id}
+                                            className="text-red-500 hover:text-red-700 disabled:opacity-50"
+                                            title="Delete comment"
+                                          >
+                                            {deletingComment === comment.id ? (
+                                              <Loader2 className="w-3 h-3 animate-spin" />
+                                            ) : (
+                                              <Trash2 className="w-3 h-3" />
+                                            )}
+                                          </button>
+                                        )}
+                                      </div>
+                                      <p className="text-gray-600">
+                                        {comment.content}
+                                      </p>
+                                      <span className="text-gray-400">
+                                        {new Date(
+                                          comment.created_at,
+                                        ).toLocaleDateString()}
+                                      </span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+
+                              {/* Add comment form */}
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  placeholder="Add a comment..."
+                                  value={commentContent}
+                                  onChange={(e) => setCommentContent(e.target.value)}
+                                  onKeyPress={(e) => {
+                                    if (e.key === "Enter" && !e.shiftKey) {
+                                      e.preventDefault();
+                                      handleAddComment(post.id);
+                                    }
+                                  }}
+                                  className="flex-1 text-xs px-2 py-1 border border-gray-300 rounded focus:outline-none focus:border-blue-500"
+                                />
+                                <button
+                                  onClick={() => handleAddComment(post.id)}
+                                  disabled={!commentContent.trim()}
+                                  className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                                >
+                                  Post
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+
+                {otherPosts.length > 3 && (
+                  <div className="flex justify-center pt-4">
+                    <Button
+                      variant="default"
+                      className="border-gray-300 text-gray-900 hover:bg-gray-50"
+                      onClick={() => setPostsExpanded((v) => !v)}
+                    >
+                      {postsExpanded ? "Show less" : `Display more (${otherPosts.length - 3})`}
+                    </Button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
 
         {/* Trending Topics Sidebar */}
@@ -781,35 +968,41 @@ export function Community() {
             <CardContent>
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Posts</span>
-                    <span className="text-sm font-medium text-gray-900">
-                      {activityLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
-                      ) : (
-                        activitySummary ? activitySummary.posts : 0
-                      )}
-                    </span>
+                  <span className="text-sm text-gray-600">Posts</span>
+                  <span className="text-sm font-medium text-gray-900">
+                    {activityLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
+                    ) : activitySummary ? (
+                      activitySummary.posts
+                    ) : (
+                      0
+                    )}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Comments</span>
-                    <span className="text-sm font-medium text-gray-900">
-                      {activityLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
-                      ) : (
-                        activitySummary ? activitySummary.comments : 0
-                      )}
-                    </span>
+                  <span className="text-sm text-gray-600">Comments</span>
+                  <span className="text-sm font-medium text-gray-900">
+                    {activityLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
+                    ) : activitySummary ? (
+                      activitySummary.comments
+                    ) : (
+                      0
+                    )}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600">Reputation</span>
-                    <Badge className="bg-blue-600 border-0 text-white">
-                      <TrendingUp className="w-3 h-3 mr-1" />
-                      {activityLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin inline-block align-text-bottom text-white" />
-                      ) : (
-                        activitySummary ? activitySummary.activityPoints : 0
-                      )}
-                    </Badge>
+                  <Badge className="bg-blue-600 border-0 text-white">
+                    <TrendingUp className="w-3 h-3 mr-1" />
+                    {activityLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin inline-block align-text-bottom text-white" />
+                    ) : activitySummary ? (
+                      activitySummary.activityPoints
+                    ) : (
+                      0
+                    )}
+                  </Badge>
                 </div>
               </div>
             </CardContent>
@@ -888,22 +1081,43 @@ export function Community() {
               />
             </div>
             <div>
-              <Label
-                htmlFor="edit-hashtags"
-                className="flex items-center gap-2"
-              >
+              <Label className="flex items-center gap-2">
                 <Hash className="w-4 h-4" />
-                Hashtags
+                Hashtags (pick from list)
               </Label>
-              <Input
-                id="edit-hashtags"
-                placeholder="#AAPL #earnings #tech (space-separated)"
-                value={editHashtags}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  setEditHashtags(e.target.value)
-                }
-                className="mt-2"
-              />
+              <div className="mt-2">
+                <Input
+                  placeholder="Search tags"
+                  value={tagSearch}
+                  onChange={(e) => setTagSearch(e.target.value)}
+                  className="mb-2"
+                />
+                <div className="flex flex-wrap gap-2">
+                  {displayedTags.map((tag) => {
+                    const selected = editHashtags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          setEditHashtags((prev) =>
+                            prev.includes(tag)
+                              ? prev.filter((tt) => tt !== tag)
+                              : [...prev, tag],
+                          );
+                        }}
+                        className={`px-2 py-1 rounded text-xs border ${
+                          selected
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-gray-700 border-gray-200"
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>

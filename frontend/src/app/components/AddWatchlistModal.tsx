@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 
 type Props = {
   open: boolean;
@@ -14,21 +15,21 @@ export default function AddWatchlistModal({ open, onClose, onAdd }: Props) {
   const handleAdd = async () => {
     const s = (symbol || "").trim().toUpperCase();
     if (!s) {
-      setError("Please enter a ticker symbol.");
+      toast.error("Please enter a ticker");
       return;
     }
-    if (!/^[A-Z]{1,5}$/.test(s)) {
-      setError("Invalid ticker format (1-5 uppercase letters).");
+    // allow '=', '/', numbers, letters, dots, hyphens (common Yahoo formats), up to 10 chars
+    if (!/^[A-Z0-9.\-=/]{1,10}$/.test(s)) {
+      toast.error("Invalid ticker");
       return;
     }
-    setError(null);
     setLoading(true);
     try {
       await onAdd(s);
       setSymbol("");
       onClose();
     } catch (err: any) {
-      setError(err?.message || "Failed to add ticker");
+      toast.error(err?.message || "Failed to add ticker");
     } finally {
       setLoading(false);
     }
@@ -37,10 +38,16 @@ export default function AddWatchlistModal({ open, onClose, onAdd }: Props) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
         <h3 className="mb-2 text-lg font-semibold">Add to Watchlist</h3>
-        <p className="mb-4 text-sm text-gray-600">Enter the stock ticker you want to add to your custom watchlist.</p>
+        <p className="mb-4 text-sm text-gray-600">
+          Enter the stock ticker you want to add to your custom watchlist.
+        </p>
 
         <input
           aria-label="Ticker"
@@ -50,7 +57,7 @@ export default function AddWatchlistModal({ open, onClose, onAdd }: Props) {
           className="w-full rounded border px-3 py-2 mb-2"
         />
 
-        {error && <div className="mb-2 text-sm text-red-600">{error}</div>}
+        {/* toasts used for feedback */}
 
         <div className="mt-4 flex justify-end gap-2">
           <button

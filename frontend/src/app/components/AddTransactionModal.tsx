@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
-import { addPortfolioTransaction, fetchStockPrice } from "@/app/services/api";
+import { addPortfolioTransaction, fetchStockPrice, searchStockSymbols } from "@/app/services/api";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +35,9 @@ export function AddTransactionModal({
   defaultSymbol = "",
 }: AddTransactionModalProps) {
   const [symbol, setSymbol] = useState(defaultSymbol.toUpperCase());
+  const [symbolQuery, setSymbolQuery] = useState(defaultSymbol);
+  const [symbolSuggestions, setSymbolSuggestions] = useState<Array<{ symbol: string; name?: string; exchange?: string }>>([]);
+  const [searchingSymbols, setSearchingSymbols] = useState(false);
   const [transactionType, setTransactionType] = useState<"buy" | "sell">("buy");
   const [shares, setShares] = useState("");
   const [pricePerShare, setPricePerShare] = useState("");
@@ -48,19 +51,45 @@ export function AddTransactionModal({
   useEffect(() => {
     if (defaultSymbol) {
       setSymbol(defaultSymbol.toUpperCase());
+      setSymbolQuery(defaultSymbol);
     }
   }, [defaultSymbol, open]);
 
   const handleSymbolChange = (value: string) => {
     const upperValue = value.toUpperCase();
     setSymbol(upperValue);
+    setSymbolQuery(value);
     setError("");
 
-    // Auto-fetch price when symbol is valid (1-5 uppercase letters)
-    if (/^[A-Z]{1,5}$/.test(upperValue)) {
+    // Auto-fetch price when symbol looks valid
+    if (/^[A-Z0-9.\-=/]{1,10}$/.test(upperValue)) {
       fetchPriceForSymbol(upperValue);
     }
   };
+
+  // Debounced symbol search for suggestions
+  useEffect(() => {
+    let cancelled = false;
+    if (!symbolQuery || symbolQuery.length < 1) {
+      setSymbolSuggestions([]);
+      setSearchingSymbols(false);
+      return;
+    }
+    setSearchingSymbols(true);
+    const t = setTimeout(async () => {
+      try {
+        const results = await searchStockSymbols(symbolQuery);
+        if (cancelled) return;
+        setSymbolSuggestions(results || []);
+      } catch (err) {
+        console.warn('Symbol search failed', err);
+        setSymbolSuggestions([]);
+      } finally {
+        setSearchingSymbols(false);
+      }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [symbolQuery]);
 
   const fetchPriceForSymbol = async (sym: string) => {
     if (!sym) return;
@@ -156,12 +185,38 @@ export function AddTransactionModal({
             <Input
               id="symbol"
               placeholder="e.g., AAPL"
-              value={symbol}
-              onChange={(e) => handleSymbolChange(e.target.value)}
-              className="mt-1 uppercase"
-              maxLength={5}
+                value={symbolQuery}
+                onChange={(e) => handleSymbolChange(e.target.value)}
+                className="mt-1 uppercase"
+                maxLength={10}
               disabled={!!defaultSymbol}
             />
+              {/* Suggestions dropdown */}
+              {((symbolSuggestions && symbolSuggestions.length > 0) || searchingSymbols) && !defaultSymbol && (
+                <div className="mt-2 bg-white border rounded shadow-sm max-h-48 overflow-auto">
+                  {searchingSymbols ? (
+                    <div className="p-2 text-sm text-gray-500">Searching...</div>
+                  ) : (
+                    symbolSuggestions.map((s) => (
+                      <button
+                        key={s.symbol}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                        onClick={() => {
+                          const sym = s.symbol.toUpperCase();
+                          setSymbol(sym);
+                          setSymbolQuery(sym);
+                          setSymbolSuggestions([]);
+                          fetchPriceForSymbol(sym);
+                        }}
+                      >
+                        <div className="font-medium">{s.symbol} {s.name ? <span className="text-gray-500">— {s.name}</span> : null}</div>
+                        <div className="text-xs text-gray-400">{s.exchange || ''}</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
           </div>
 
           <div>

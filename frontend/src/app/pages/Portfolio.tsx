@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Sparkles,
   TrendingUp,
@@ -8,6 +8,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { useAuth } from "@/app/context/AuthContext";
+import { fetchTheses } from "@/app/services/api";
 import { usePortfolio } from "@/app/hooks/usePortfolio";
 import { PortfolioPieChart } from "@/app/components/PortfolioPieChart";
 import { TransactionHistoryModal } from "@/app/components/TransactionHistoryModal";
@@ -30,6 +31,82 @@ function formatLastUpdate(ts: number | null): string {
   if (diff < 60000) return "Just now";
   if (diff < 3600000) return `${Math.floor(diff / 60000)} min ago`;
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function ThesisList({ token }: { token?: string | null }) {
+  const [theses, setTheses] = useState<any[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!token) return;
+    setLoading(true);
+    fetchTheses(token)
+      .then((res) => {
+        if (!mounted) return;
+        setTheses(Array.isArray(res) ? res : []);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setTheses([]);
+      })
+      .finally(() => mounted && setLoading(false));
+
+    return () => {
+      mounted = false;
+    };
+  }, [token]);
+
+  if (!token) {
+    return (
+      <p className="text-sm text-gray-600">Sign in to view thesis-driven alerts.</p>
+    );
+  }
+
+  if (loading) return <p className="text-sm text-gray-600">Loading…</p>;
+
+  const alerts = (theses || []).filter((t) =>
+    ["needs-review", "breached"].includes(t.status)
+  );
+
+  if (!alerts.length) {
+    return (
+      <div>
+        <p className="text-sm text-yellow-900 font-medium">No concentration alerts</p>
+        <p className="text-xs text-yellow-800">No server-recorded theses require review.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {alerts.map((t) => (
+        <div key={t.id} className="p-3 bg-white rounded-md border">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-medium text-sm text-gray-900">{t.symbol} — {t.title || t.name}</p>
+              <p className="text-xs text-gray-600 mt-1">{(t.body || "").slice(0, 120)}{(t.body || "").length > 120 ? '…' : ''}</p>
+            </div>
+            <div className="text-right">
+              {(() => {
+                const status = t.status;
+                const label = status === 'needs-review' ? 'Needs Review' : status === 'breached' ? 'Breached' : status;
+                const cls = status === 'breached'
+                  ? 'bg-red-100 text-red-800 border border-red-200'
+                  : status === 'needs-review'
+                  ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
+                  : '';
+                return <Badge className={cls}>{label}</Badge>;
+              })()}
+              <div className="mt-2">
+                <a href={`/thesis#${encodeURIComponent(t.symbol)}`} className="text-xs text-blue-600 hover:underline">View</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function Portfolio() {
@@ -144,37 +221,8 @@ export function Portfolio() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-yellow-900">
-                    Tech Sector
-                  </span>
-                  <Badge variant="destructive" className="border-0">
-                    High Risk
-                  </Badge>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2 mb-1">
-                  <div
-                    className="h-2 rounded-full bg-red-500"
-                    style={{ width: "65%" }}
-                  />
-                </div>
-                <p className="text-xs text-yellow-700">
-                  65% of portfolio (Target: 40-50%)
-                </p>
-              </div>
-
-              <Separator className="bg-yellow-200" />
-
-              <div className="p-4 rounded-lg bg-white border border-blue-500/20 mt-4">
-                <p className="text-xs font-semibold text-[#1e40af] uppercase tracking-wider mb-2">
-                  Recommendation
-                </p>
-                <p className="text-sm leading-relaxed text-stone-600">
-                  Consider taking some profits from AAPL or MSFT and
-                  diversifying into healthcare or consumer goods sectors.
-                </p>
-              </div>
+              {/* Fetch and list server-backed theses that need review or are breached */}
+              <ThesisList token={token} />
             </div>
           </CardContent>
         </Card>
