@@ -1,0 +1,38 @@
+{
+  "tests": [
+    {
+      "id": "button_color_test",
+      "name": "Primary Button Color Test",
+      "description": "Testing which button color leads to more clicks",
+      "active": true,
+      "variations": ["A", "B"],
+      "targetAction": "button_click",
+      "metadata": {
+        "variationA": {
+          "description": "Blue button",
+          "color": "#007bff"
+        },
+        "variationB": {
+          "description": "Green button",
+          "color": "#28a745"
+        }
+      }
+    },
+    {
+      "id": "homepage_layout_test",
+      "name": "Homepage Layout Test",
+      "description": "Testing grid vs list layout",
+      "active": true,
+      "variations": ["A", "B"],
+      "targetAction": "explore_stocks",
+      "metadata": {
+        "variationA": {
+          "description": "Grid layout"
+        },
+        "variationB": {
+          "description": "List layout"
+        }
+      }
+    }
+  ]
+}
