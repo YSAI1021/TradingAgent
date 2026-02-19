@@ -107,4 +107,4 @@ src/
 
 ---
 
-*Original design: [Figma — Web User Journey MVP](https://www.figma.com/design/Y1aS4674karUxqbFd5s4Wg/Web-User-Journey-MVP)*
+*Original design: https://trading-agent-yale.vercel.app/*
