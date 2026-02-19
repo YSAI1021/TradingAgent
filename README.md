@@ -9,14 +9,14 @@ A modern web application for portfolio tracking, investment thesis management, a
 ## Features
 
 ### Dashboard
-- **Today's Portfolio Brief** — AI-powered summary of stock, sector, and portfolio-level movements
+- **AI Brief (Portfolio Overview)** — Gemini + RAG summary of stock, sector, and portfolio-level movements
 - **Top Movers** — Best performers in your portfolio and across the market
 - **Risk Exposure** — Tech concentration, market cap diversity, and sector volatility metrics
 - **Rule Triggers & Alerts** — Concentration and target alerts (e.g., concentration alerts, portfolio targets)
 - **Customizable Tiles** — Show or hide sections to tailor your view
 
 ### Portfolio
-- **AI Weekly Recap** — Performance summary, insights, and key drivers (tech, finance, energy)
+- **AI Brief (Portfolio Weekly)** — Performance summary, key drivers, and concentration guidance
 - **Portfolio Allocation** — Interactive pie chart of holdings by allocation
 - **Concentration Alerts** — Sector weight warnings (e.g., tech over 60%) and diversification recommendations
 - **Current Holdings** — Table with shares, avg cost, current price, gain/loss, and allocation
@@ -29,18 +29,18 @@ A modern web application for portfolio tracking, investment thesis management, a
 
 ### Stock Detail
 - Price chart and key metrics
-- **AI News Themes & Sentiment** — Themes, article counts, and overall sentiment trend
+- **AI Brief (Per Stock)** — News themes, sentiment trend, and holding-level implications
 - **Impact on Your Holdings** — Portfolio exposure and correlation insights
 - Fundamentals and technical analysis tabs
 
 ### Thesis
-- **Thesis Health Check** — Overall assessment and on-track vs. needs-review counts
+- **AI Brief (Thesis Health Check)** — Overall assessment and on-track vs. needs-review counts
 - **Rule Adherence Analysis** — Compliance score, rule-by-rule breakdown, violations, patterns, and recommendations
 - **Thesis Cards** — Per-stock investment thesis, entry/target/stop, progress bar
 - **Clickable "Needs Review"** — Scrolls to and highlights the card requiring attention
 
 ### Community
-- **AI Community Highlights** — Consensus (bullish/agree), controversy (divided/mixed), and your content performance
+- **AI Brief (Community Signals)** — Consensus, controversy, and your content performance
 - **Community Feed** — Posts with likes, comments, tags
 - **Trending Topics** — Popular discussions with sentiment badges
 - Create-post flow
@@ -48,6 +48,7 @@ A modern web application for portfolio tracking, investment thesis management, a
 ### Portfolio Copilot (Sidebar)
 - Context-aware suggested prompts based on current page (Dashboard, Portfolio, Stocks, Thesis, Community)
 - Chat-style input with voice and attachment options
+- **Evidence Mode** — AI replies render Evidence Chips (`source`, `evidence`, `confidence`)
 - Auto-fill prompts on click
 
 ## Tech Stack
@@ -59,6 +60,8 @@ A modern web application for portfolio tracking, investment thesis management, a
 - **Recharts** — Charts (pie, line)
 - **Radix UI** — Accessible components
 - **Lucide React** — Icons
+- **Google Gemini API** — AI generation
+- **RAG Context Layer** — portfolio + news retrieval for grounded responses
 
 ## Getting Started
 

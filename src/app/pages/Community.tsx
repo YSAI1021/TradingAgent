@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { TrendingUp, Sparkles, ThumbsUp, ThumbsDown, MessageCircle, Bookmark, Share2, ExternalLink, Plus, Hash } from "lucide-react";
+import { TrendingUp, Sparkles, ThumbsUp, ThumbsDown, MessageCircle, Bookmark, Share2, Plus, Hash } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/app/components/ui/avatar";
@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Textarea } from "@/app/components/ui/textarea";
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
+import { EvidenceChips } from "@/app/components/EvidenceChips";
 
 export function Community() {
   const [createPostOpen, setCreatePostOpen] = useState(false);
@@ -65,6 +66,23 @@ export function Community() {
     setPostTitle("");
     setPostHashtags("");
   };
+  const communityEvidence = [
+    {
+      source: "Community Sentiment",
+      evidence: "NVDA and tech discussions show bullish consensus, while valuation debate remains elevated.",
+      confidence: "Medium" as const,
+    },
+    {
+      source: "Engagement Signals",
+      evidence: "Your technical-analysis posts are receiving stronger views and engagement.",
+      confidence: "Medium" as const,
+    },
+    {
+      source: "Portfolio Match",
+      evidence: "Controversial community topics overlap with your high-weight holdings; monitor viewpoint divergence risk.",
+      confidence: "High" as const,
+    },
+  ];
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -155,15 +173,9 @@ export function Community() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
-            AI Community Highlights
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-6 px-2 text-xs"
-            >
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
+            AI Brief · Community Signals
+            <Badge variant="outline" className="ml-auto bg-white/80">Gemini + RAG</Badge>
+            <Badge variant="outline" className="bg-white/80">Evidence Mode</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -228,6 +240,8 @@ export function Community() {
               <li className="leading-relaxed">Community finds your earnings commentary most valuable</li>
             </ul>
           </div>
+          <Separator className="bg-blue-200" />
+          <EvidenceChips items={communityEvidence} />
         </CardContent>
       </Card>
       

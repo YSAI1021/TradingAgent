@@ -113,7 +113,7 @@ export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
       return {
         success: false,
         error: 'Gemini API key not configured',
-        message: 'Please set your Gemini API key in Settings to use the AI Assistant.',
+        message: 'Gemini API key is not configured on the server. Set GEMINI_API_KEY in backend/.env and restart the backend.',
       }
     }
 
@@ -231,6 +231,9 @@ Guidelines:
 - IMPORTANT: When giving recommendations, consider the user's CURRENT PORTFOLIO holdings listed below
 - IMPORTANT: When relevant news is provided below, USE IT to support your analysis with specific citations
 - When citing news, mention the source and provide context from the article
+- Respect data privacy: never expose private portfolio details that are not needed to answer the question
+- Evidence Mode is mandatory: end each response with 2-4 compact evidence bullets in this format:
+  Source | Evidence | Confidence (High/Medium/Low)
 `
 
   // Add detailed portfolio context if available
@@ -284,7 +287,7 @@ Guidelines:
   // Add news context if available
   if (context.news && context.news.length > 0) {
     prompt += `\n\n=== RECENT NEWS FOR RELEVANT STOCKS ===`
-    prompt += `\nUse the following recent news to support your analysis. Cite sources when referencing this information.\n`
+    prompt += `\nUse the following retrieved news context (RAG) to support your analysis. Cite sources when referencing this information.\n`
 
     context.news.forEach((article, index) => {
       prompt += `\n[${index + 1}] ${article.stock_ticker ? `$${article.stock_ticker}` : 'General'}`
@@ -307,6 +310,7 @@ Guidelines:
     prompt += `\n- Cite the source by name (e.g., "According to [Source]...")`
     prompt += `\n- Mention the sentiment if relevant`
     prompt += `\n- Provide the article URL for users to read more`
+    prompt += `\n- Include confidence labels (High/Medium/Low) in the final evidence bullets`
   }
 
   prompt += `\nAlways remind users that you provide educational information only, not financial advice.`

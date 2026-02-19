@@ -2163,184 +2163,220 @@ app.post("/api/user/sync-activity", authenticateToken, (req, res) => {
 
 // ============== AI Chat Routes ==============
 
-// Chat with AI trading assistant
+const toConfidenceLabel = (score = 0) => {
+  if (score >= 0.75) return "High";
+  if (score >= 0.5) return "Medium";
+  return "Low";
+};
+
+const buildEvidenceChips = (relevantNews = []) =>
+  relevantNews.map((n) => {
+    const raw = typeof n.content === "string" ? n.content.trim() : "";
+    const evidenceText =
+      raw.length > 0 ? `${raw.slice(0, 140)}${raw.length > 140 ? "..." : ""}` : n.title;
+
+    return {
+      source: n.news_source || "News",
+      evidence: evidenceText,
+      confidence: toConfidenceLabel(Number(n.sentiment_confidence || 0)),
+      url: n.news_url || null,
+    };
+  });
+
+const buildPortfolioFromTransactions = (userId) => {
+  const transactions = db
+    .prepare(
+      `
+      SELECT symbol, transaction_type, shares, price_per_share
+      FROM portfolio_transactions
+      WHERE user_id = ?
+      ORDER BY symbol, transaction_date
+    `,
+    )
+    .all(userId);
+
+  const holdings = {};
+  transactions.forEach((tx) => {
+    if (!holdings[tx.symbol]) {
+      holdings[tx.symbol] = { totalShares: 0, totalCost: 0 };
+    }
+    if (tx.transaction_type === "buy") {
+      holdings[tx.symbol].totalShares += tx.shares;
+      holdings[tx.symbol].totalCost += tx.shares * tx.price_per_share;
+    } else if (tx.transaction_type === "sell") {
+      const avgCost =
+        holdings[tx.symbol].totalShares > 0
+          ? holdings[tx.symbol].totalCost / holdings[tx.symbol].totalShares
+          : 0;
+      holdings[tx.symbol].totalShares -= tx.shares;
+      holdings[tx.symbol].totalCost -= tx.shares * avgCost;
+    }
+  });
+
+  return Object.entries(holdings)
+    .filter(([_, h]) => h.totalShares > 0)
+    .map(([symbol, h]) => ({
+      symbol,
+      shares: h.totalShares,
+      averageCost: h.totalCost / h.totalShares,
+    }));
+};
+
+const normalizePortfolioPayload = (portfolio) => {
+  if (!Array.isArray(portfolio)) return [];
+
+  return portfolio
+    .filter((h) => h && h.symbol && Number(h.shares) > 0)
+    .map((h) => ({
+      symbol: String(h.symbol).toUpperCase(),
+      shares: Number(h.shares),
+      averageCost: Number(h.averageCost || h.avgCost || 0),
+      currentPrice: h.currentPrice ? Number(h.currentPrice) : undefined,
+    }));
+};
+
+const fetchRelevantNewsWithSentiment = async (detectedTickers, apiKey) => {
+  if (!detectedTickers.length) return [];
+
+  try {
+    const placeholders = detectedTickers.map(() => "?").join(",");
+    const relevantNews = db
+      .prepare(
+        `
+        SELECT DISTINCT p.id, p.stock_ticker, p.title, p.content, p.news_url, p.news_source,
+               p.news_published_at, p.sentiment, p.sentiment_confidence
+        FROM posts p
+        WHERE p.is_news = 1
+          AND p.stock_ticker IN (${placeholders})
+        ORDER BY p.news_published_at DESC, p.created_at DESC
+        LIMIT 6
+      `,
+      )
+      .all(...detectedTickers);
+
+    const updateSentimentStmt = db.prepare(
+      "UPDATE posts SET sentiment = ?, sentiment_confidence = ? WHERE id = ?",
+    );
+
+    for (let i = 0; i < relevantNews.length; i++) {
+      const news = relevantNews[i];
+      if (!news.sentiment || news.sentiment === "neutral" || news.sentiment === "") {
+        try {
+          const analysis = await analyzeNewsSentiment(
+            news.title,
+            news.content,
+            news.stock_ticker,
+            apiKey || process.env.GEMINI_API_KEY || null,
+          );
+          updateSentimentStmt.run(analysis.sentiment, analysis.confidence, news.id);
+          relevantNews[i].sentiment = analysis.sentiment;
+          relevantNews[i].sentiment_confidence = analysis.confidence;
+        } catch (err) {
+          console.error(`Failed to analyze sentiment for news ${news.id}:`, err.message);
+        }
+      }
+    }
+
+    return relevantNews;
+  } catch (err) {
+    console.error("Error fetching news for AI context:", err);
+    return [];
+  }
+};
+
+const buildAiResponsePayload = (result, detectedTickers, relevantNews) => ({
+  ...result,
+  detectedTickers,
+  newsCount: relevantNews.length,
+  rag: {
+    enabled: true,
+    retrievedDocuments: relevantNews.length,
+    retrievedTickers: detectedTickers,
+  },
+  evidenceMode: true,
+  evidenceChips: buildEvidenceChips(relevantNews),
+  newsUsed: relevantNews.map((n) => ({
+    ticker: n.stock_ticker,
+    title: n.title,
+    source: n.news_source,
+    url: n.news_url,
+    sentiment: n.sentiment,
+    confidence: n.sentiment_confidence,
+  })),
+});
+
+const validateMessages = (messages) =>
+  Array.isArray(messages) &&
+  messages.length > 0 &&
+  messages.every(
+    (msg) => msg && msg.role && msg.content && ["user", "assistant"].includes(msg.role),
+  );
+
+// Authenticated chat route (existing behavior with user portfolio context)
 app.post("/api/ai/chat", authenticateToken, async (req, res) => {
   try {
     const { messages, apiKey } = req.body;
 
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: "Messages array is required" });
-    }
-
-    if (!apiKey) {
-      return res.status(400).json({
-        success: false,
-        error: "API key is required",
-        message:
-          "Please set your Gemini API key in Settings to use the AI Assistant.",
-      });
-    }
-
-    // Validate message format
-    const validMessages = messages.every(
-      (msg) =>
-        msg.role && msg.content && ["user", "assistant"].includes(msg.role),
-    );
-
-    if (!validMessages) {
+    if (!validateMessages(messages)) {
       return res.status(400).json({
         error:
           "Invalid message format. Each message must have role (user/assistant) and content.",
       });
     }
 
-    // Get the latest user message to extract tickers
     const latestUserMessage = messages.filter((m) => m.role === "user").pop();
-    const detectedTickers = latestUserMessage
-      ? extractTickers(latestUserMessage.content)
-      : [];
+    const detectedTickers = latestUserMessage ? extractTickers(latestUserMessage.content) : [];
+    const relevantNews = await fetchRelevantNewsWithSentiment(detectedTickers, apiKey);
 
-    // Fetch relevant news for detected tickers from database
-    let relevantNews = [];
-    if (detectedTickers.length > 0) {
-      try {
-        const placeholders = detectedTickers.map(() => "?").join(",");
-        relevantNews = db
-          .prepare(
-            `
-            SELECT DISTINCT p.id, p.stock_ticker, p.title, p.content, p.news_url, p.news_source,
-                   p.news_published_at, p.sentiment, p.sentiment_confidence
-            FROM posts p
-            WHERE p.is_news = 1
-              AND p.stock_ticker IN (${placeholders})
-            ORDER BY p.news_published_at DESC, p.created_at DESC
-            LIMIT 6
-          `,
-          )
-          .all(...detectedTickers);
-
-        console.log(
-          `Found ${relevantNews.length} news articles for tickers: ${detectedTickers.join(", ")}`,
-        );
-
-        // Analyze sentiment for news that doesn't have it yet (using user's API key)
-        const updateSentimentStmt = db.prepare(
-          "UPDATE posts SET sentiment = ?, sentiment_confidence = ? WHERE id = ?",
-        );
-
-        for (let i = 0; i < relevantNews.length; i++) {
-          const news = relevantNews[i];
-          if (
-            !news.sentiment ||
-            news.sentiment === "neutral" ||
-            news.sentiment === ""
-          ) {
-            try {
-              console.log(
-                `Analyzing sentiment for: ${news.title.substring(0, 40)}...`,
-              );
-              const analysis = await analyzeNewsSentiment(
-                news.title,
-                news.content,
-                news.stock_ticker,
-                apiKey,
-              );
-
-              // Update in database
-              updateSentimentStmt.run(
-                analysis.sentiment,
-                analysis.confidence,
-                news.id,
-              );
-
-              // Update in current array for response
-              relevantNews[i].sentiment = analysis.sentiment;
-              relevantNews[i].sentiment_confidence = analysis.confidence;
-
-              console.log(
-                `  -> ${analysis.sentiment} (${(analysis.confidence * 100).toFixed(0)}%)`,
-              );
-            } catch (err) {
-              console.error(
-                `Failed to analyze sentiment for news ${news.id}:`,
-                err.message,
-              );
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Error fetching news for AI context:", err);
-      }
-    }
-
-    // Get user's portfolio for context
-    const transactions = db
-      .prepare(
-        `
-      SELECT symbol, transaction_type, shares, price_per_share
-      FROM portfolio_transactions
-      WHERE user_id = ?
-      ORDER BY symbol, transaction_date
-    `,
-      )
-      .all(req.user.id);
-
-    // Calculate current holdings
-    const holdings = {};
-    transactions.forEach((tx) => {
-      if (!holdings[tx.symbol]) {
-        holdings[tx.symbol] = { totalShares: 0, totalCost: 0 };
-      }
-      if (tx.transaction_type === "buy") {
-        holdings[tx.symbol].totalShares += tx.shares;
-        holdings[tx.symbol].totalCost += tx.shares * tx.price_per_share;
-      } else if (tx.transaction_type === "sell") {
-        const avgCost =
-          holdings[tx.symbol].totalShares > 0
-            ? holdings[tx.symbol].totalCost / holdings[tx.symbol].totalShares
-            : 0;
-        holdings[tx.symbol].totalShares -= tx.shares;
-        holdings[tx.symbol].totalCost -= tx.shares * avgCost;
-      }
-    });
-
-    const portfolio = Object.entries(holdings)
-      .filter(([_, h]) => h.totalShares > 0)
-      .map(([symbol, h]) => ({
-        symbol,
-        shares: h.totalShares,
-        averageCost: h.totalCost / h.totalShares,
-      }));
-
-    // Build context object with news
     const context = {
       user: { username: req.user.username },
-      portfolio,
+      portfolio: buildPortfolioFromTransactions(req.user.id),
       news: relevantNews,
       detectedTickers,
     };
 
-    // Call AI service with user-provided API key
     const result = await chatWithAI({ messages, context, apiKey });
-
-    // Include detected tickers and news count in response for frontend
-    res.json({
-      ...result,
-      detectedTickers,
-      newsCount: relevantNews.length,
-      newsUsed: relevantNews.map((n) => ({
-        ticker: n.stock_ticker,
-        title: n.title,
-        source: n.news_source,
-        url: n.news_url,
-        sentiment: n.sentiment,
-      })),
-    });
+    res.json(buildAiResponsePayload(result, detectedTickers, relevantNews));
   } catch (error) {
     console.error("AI chat error:", error);
     res.status(500).json({
       success: false,
       error: "Failed to process chat request",
+      message: "Sorry, I encountered an error. Please try again.",
+    });
+  }
+});
+
+// Public copilot route for UI pages without auth session
+app.post("/api/ai/copilot", async (req, res) => {
+  try {
+    const { messages, apiKey, portfolio } = req.body;
+
+    if (!validateMessages(messages)) {
+      return res.status(400).json({
+        error:
+          "Invalid message format. Each message must have role (user/assistant) and content.",
+      });
+    }
+
+    const latestUserMessage = messages.filter((m) => m.role === "user").pop();
+    const detectedTickers = latestUserMessage ? extractTickers(latestUserMessage.content) : [];
+    const relevantNews = await fetchRelevantNewsWithSentiment(detectedTickers, apiKey);
+
+    const context = {
+      user: { username: "copilot_guest" },
+      portfolio: normalizePortfolioPayload(portfolio),
+      news: relevantNews,
+      detectedTickers,
+    };
+
+    const result = await chatWithAI({ messages, context, apiKey });
+    res.json(buildAiResponsePayload(result, detectedTickers, relevantNews));
+  } catch (error) {
+    console.error("AI copilot error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to process copilot request",
       message: "Sorry, I encountered an error. Please try again.",
     });
   }

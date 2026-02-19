@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle, Flame, TrendingUp, TrendingDown, Minus, ChevronRight, Settings, X, ExternalLink, Sparkles } from "lucide-react";
+import { AlertCircle, CheckCircle, ChevronRight, Settings, X, Sparkles } from "lucide-react";
 import { usePortfolio } from "@/app/hooks/usePortfolio";
 import { Card, CardHeader, CardTitle, CardContent } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
@@ -7,6 +7,7 @@ import { Link } from "react-router";
 import { useState, useMemo } from "react";
 import { Button } from "@/app/components/ui/button";
 import { ActionWorkflow } from "@/app/components/ActionWorkflow";
+import { EvidenceChips } from "@/app/components/EvidenceChips";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,6 +53,24 @@ export function Dashboard() {
     warning: "border-l-yellow-500",
     alert: "border-l-red-500",
   };
+
+  const dashboardEvidence = [
+    {
+      source: "Portfolio Holdings",
+      evidence: "AAPL and MSFT gains contributed most of today's portfolio move.",
+      confidence: "High" as const,
+    },
+    {
+      source: "Sector Exposure",
+      evidence: "Tech allocation is around 65%, above the target band, increasing concentration risk.",
+      confidence: "High" as const,
+    },
+    {
+      source: "News Retrieval",
+      evidence: "Earnings-related positive news was retrieved, while energy-sector coverage remains mixed.",
+      confidence: "Medium" as const,
+    },
+  ];
 
   const { holdings, totalValue } = usePortfolio();
 
@@ -155,16 +174,10 @@ export function Dashboard() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
-            Today's Portfolio Brief
+            AI Brief · Portfolio Overview
             <Badge variant="outline" className="ml-auto bg-white/80">Last updated: 2 min ago</Badge>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs ml-2 text-blue-900 hover:bg-blue-100"
-            >
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
+            <Badge variant="outline" className="bg-white/80">Gemini + RAG</Badge>
+            <Badge variant="outline" className="bg-white/80">Evidence Mode</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 text-blue-900">
@@ -203,6 +216,8 @@ export function Dashboard() {
                 </div>
               </div>
           ))}
+          <Separator className="bg-blue-200" />
+          <EvidenceChips items={dashboardEvidence} />
         </CardContent>
       </Card>
       

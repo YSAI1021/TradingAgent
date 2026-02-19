@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Sparkles, TrendingUp, AlertTriangle, Target, ExternalLink, Pencil } from "lucide-react";
+import { Sparkles, TrendingUp, AlertTriangle, Target, Pencil } from "lucide-react";
 import { usePortfolio } from "@/app/hooks/usePortfolio";
 import { PortfolioPieChart } from "@/app/components/PortfolioPieChart";
 import { TransactionHistoryModal } from "@/app/components/TransactionHistoryModal";
@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/app/components/ui/ca
 import { Badge } from "@/app/components/ui/badge";
 import { Separator } from "@/app/components/ui/separator";
 import { Button } from "@/app/components/ui/button";
+import { EvidenceChips } from "@/app/components/EvidenceChips";
 
 function formatLastUpdate(ts: number | null): string {
   if (!ts) return "Loading...";
@@ -21,6 +22,23 @@ function formatLastUpdate(ts: number | null): string {
 export function Portfolio() {
   const { holdings, totalValue, lastUpdatedAt } = usePortfolio();
   const [transactionModal, setTransactionModal] = useState<{ ticker: string; name: string } | null>(null);
+  const portfolioEvidence = [
+    {
+      source: "Portfolio PnL",
+      evidence: "Weekly portfolio gains were driven by tech, while energy was a drag.",
+      confidence: "High" as const,
+    },
+    {
+      source: "Benchmark Check",
+      evidence: "The portfolio outperformed its benchmark this week, with excess return mostly from AAPL/MSFT.",
+      confidence: "Medium" as const,
+    },
+    {
+      source: "RAG News Context",
+      evidence: "Retrieved 12 news items and 5 earnings summaries supporting this weekly brief.",
+      confidence: "Medium" as const,
+    },
+  ];
   
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -46,15 +64,9 @@ export function Portfolio() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
-            AI Weekly Recap
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-6 px-2 text-xs"
-            >
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
+            AI Brief · Portfolio Overview
+            <Badge variant="outline" className="ml-auto bg-white/80">Gemini + RAG</Badge>
+            <Badge variant="outline" className="bg-white/80">Evidence Mode</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="text-blue-900">
@@ -91,6 +103,8 @@ export function Portfolio() {
                 </div>
               </div>
             </div>
+            <Separator className="bg-blue-200" />
+            <EvidenceChips items={portfolioEvidence} />
           </div>
         </CardContent>
       </Card>

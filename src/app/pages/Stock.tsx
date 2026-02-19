@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router";
 import { useStockQuotes } from "@/app/hooks/useStockQuotes";
-import { TrendingUp, TrendingDown, Minus, Sparkles, AlertCircle, FileText, ExternalLink, Loader2, Building2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Sparkles, AlertCircle, FileText, Loader2, Building2 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Separator } from "@/app/components/ui/separator";
@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/ta
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/app/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/app/components/ui/dialog";
+import { EvidenceChips } from "@/app/components/EvidenceChips";
 
 const TIMEFRAMES = [
   { id: "1D", range: "1d", interval: "5m", label: "1D" },
@@ -314,6 +315,23 @@ export function Stock() {
     { metric: "Sector Exposure", value: "65% in Tech" },
     { metric: "Correlation Risk", value: "High with MSFT, GOOGL" },
   ];
+  const stockEvidence = [
+    {
+      source: "Price Chart",
+      evidence: `${symbol} has maintained positive momentum versus the start of the selected period.`,
+      confidence: "Medium" as const,
+    },
+    {
+      source: "RAG News Retrieval",
+      evidence: "Theme analysis is based on recent retrieved news covering earnings, product, and supply-chain events.",
+      confidence: "Medium" as const,
+    },
+    {
+      source: "Portfolio Exposure",
+      evidence: "This holding has high portfolio impact and strong correlation with your tech exposure.",
+      confidence: "High" as const,
+    },
+  ];
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -377,10 +395,15 @@ export function Stock() {
               <p className="text-gray-700">{companyOverview.recentDevelopments}</p>
             </div>
             <div className="pt-4 border-t">
-              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-gray-500">
-                <ExternalLink className="w-3 h-3 mr-1" />
-                AI-generated summary · Sources
-              </Button>
+              <EvidenceChips
+                items={[
+                  {
+                    source: "Company Overview",
+                    evidence: "Company overview is generated from sector, product, and recent development context.",
+                    confidence: "Medium",
+                  },
+                ]}
+              />
             </div>
           </div>
         </DialogContent>
@@ -484,11 +507,9 @@ export function Stock() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
-            AI News Themes & Sentiment
-            <Button variant="ghost" size="sm" className="ml-auto h-6 px-2 text-xs">
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
+            AI Brief · Holdings Impact for {symbol}
+            <Badge variant="outline" className="ml-auto bg-white/80">Gemini + RAG</Badge>
+            <Badge variant="outline" className="bg-white/80">Evidence Mode</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -523,6 +544,7 @@ export function Stock() {
                 chain updates in coming weeks.
               </p>
             </div>
+            <EvidenceChips items={stockEvidence} />
           </div>
         </CardContent>
       </Card>

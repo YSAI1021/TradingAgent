@@ -431,21 +431,50 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface EvidenceChip {
+  source: string;
+  evidence: string;
+  confidence: "High" | "Medium" | "Low";
+  url?: string | null;
+}
+
 export interface ChatResponse {
   success: boolean;
   message: string;
-  newsUsed?: string[];
+  newsUsed?: Array<{
+    ticker?: string;
+    title?: string;
+    source?: string;
+    url?: string;
+    sentiment?: string;
+    confidence?: number;
+  }>;
   detectedTickers?: string[];
+  newsCount?: number;
+  evidenceMode?: boolean;
+  evidenceChips?: EvidenceChip[];
+  rag?: {
+    enabled: boolean;
+    retrievedDocuments: number;
+    retrievedTickers: string[];
+  };
 }
 
 export async function chatWithAI(
-  token: string,
   messages: ChatMessage[],
+  token?: string,
+  portfolio?: Array<{
+    symbol: string;
+    shares: number;
+    averageCost: number;
+    currentPrice?: number;
+  }>,
 ): Promise<ChatResponse> {
-  return apiCall<ChatResponse>("/api/ai/chat", {
+  const endpoint = token ? "/api/ai/chat" : "/api/ai/copilot";
+  return apiCall<ChatResponse>(endpoint, {
     method: "POST",
     token,
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, portfolio }),
   });
 }
 
