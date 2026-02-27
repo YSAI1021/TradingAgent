@@ -40,10 +40,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const storedUser = localStorage.getItem(USER_STORAGE_KEY);
 
     if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
+      try {
+        setToken(storedToken);
+        setUser(JSON.parse(storedUser));
+      } catch {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(USER_STORAGE_KEY);
+      }
     }
     setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const handleInvalidToken = () => {
+      setUser(null);
+      setToken(null);
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(USER_STORAGE_KEY);
+    };
+
+    window.addEventListener("auth:invalid-token", handleInvalidToken);
+    return () => {
+      window.removeEventListener("auth:invalid-token", handleInvalidToken);
+    };
   }, []);
 
   const handleLogin = async (username: string, password: string) => {

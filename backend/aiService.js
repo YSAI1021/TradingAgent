@@ -3,6 +3,34 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 // Initialize Google Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
 
+const GEMINI_PLACEHOLDER_KEY = 'YOUR_GEMINI_API_KEY'
+
+const sanitizeApiKey = (value) => {
+  if (!value) return ''
+  const trimmed = String(value).trim()
+  return trimmed.replace(/^['"]|['"]$/g, '')
+}
+
+const isConfiguredApiKey = (key) => {
+  if (!key) return false
+  if (key === GEMINI_PLACEHOLDER_KEY) return false
+  // Gemini keys from AI Studio currently start with "AIza"
+  return key.startsWith('AIza') && key.length >= 30
+}
+
+const resolveGeminiApiKey = (requestApiKey) => {
+  const cleanedRequestKey = sanitizeApiKey(requestApiKey)
+  const cleanedEnvKey = sanitizeApiKey(process.env.GEMINI_API_KEY)
+
+  if (isConfiguredApiKey(cleanedRequestKey)) {
+    return cleanedRequestKey
+  }
+  if (isConfiguredApiKey(cleanedEnvKey)) {
+    return cleanedEnvKey
+  }
+  return ''
+}
+
 /**
  * Common stock ticker patterns for extraction
  */
@@ -108,12 +136,12 @@ export const extractTickers = (message) => {
 export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
   try {
     // Check if API key exists (use provided key or fallback to env)
-    const geminiApiKey = apiKey || process.env.GEMINI_API_KEY
+    const geminiApiKey = resolveGeminiApiKey(apiKey)
     if (!geminiApiKey) {
       return {
         success: false,
         error: 'Gemini API key not configured',
-        message: 'Gemini API key is not configured on the server. Set GEMINI_API_KEY in backend/.env and restart the backend.',
+        message: 'Gemini API key is missing or placeholder. Set a real GEMINI_API_KEY in backend/.env (not YOUR_GEMINI_API_KEY) or provide a valid apiKey from the client, then restart the backend.',
       }
     }
 
@@ -186,15 +214,31 @@ export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
   } catch (error) {
     console.error('Gemini chat error:', error)
 
-    if (error.message && error.message.includes('API key')) {
+    const errorMessage = String(error?.message || '').toLowerCase()
+    const statusCode = Number(error?.status || 0)
+
+    if (
+      (statusCode === 403 && errorMessage.includes('reported as leaked')) ||
+      errorMessage.includes('api key not valid') ||
+      errorMessage.includes('invalid api key')
+    ) {
       return {
         success: false,
-        error: 'Invalid Gemini API key',
-        message: 'AI service is misconfigured. Please contact administrator.',
+        error: 'Gemini API key is blocked or invalid',
+        message:
+          'The Gemini API key is blocked (for example: leaked/revoked) or invalid. Create a new key in Google AI Studio and update GEMINI_API_KEY in backend/.env.',
       }
     }
 
-    if (error.message && error.message.includes('quota')) {
+    if (errorMessage.includes('api key')) {
+      return {
+        success: false,
+        error: 'Invalid Gemini API key',
+        message: 'Gemini API key validation failed. Update GEMINI_API_KEY in backend/.env or provide a valid key from the client.',
+      }
+    }
+
+    if (errorMessage.includes('quota') || statusCode === 429) {
       return {
         success: false,
         error: 'Gemini quota exceeded',
@@ -351,7 +395,7 @@ const classifyStock = (symbol) => {
  */
 export const analyzeNewsSentiment = async (title, content, stockTicker = null, apiKey = null) => {
   try {
-    const geminiApiKey = apiKey || process.env.GEMINI_API_KEY
+    const geminiApiKey = resolveGeminiApiKey(apiKey)
     if (!geminiApiKey) {
       return { sentiment: 'neutral', confidence: 0 }
     }

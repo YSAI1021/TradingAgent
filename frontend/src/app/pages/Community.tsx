@@ -3,7 +3,6 @@ import {
   TrendingUp,
   Sparkles,
   MessageCircle,
-  ExternalLink,
   Plus,
   Hash,
   Loader2,
@@ -11,8 +10,13 @@ import {
   Trash2,
   Edit2,
   Eye,
+  ThumbsUp,
+  ThumbsDown,
+  Bookmark,
+  Repeat2,
 } from "lucide-react";
 import { useAuth } from "@/app/context/AuthContext";
+import { usePortfolio } from "@/app/hooks/usePortfolio";
 import {
   createPost,
   fetchPosts,
@@ -28,6 +32,7 @@ import {
   Post,
   Comment,
   ActivitySummary,
+  NewsArticle,
 } from "@/app/services/api";
 import {
   Card,
@@ -49,9 +54,54 @@ import {
 import { Textarea } from "@/app/components/ui/textarea";
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
+import SourcesModal from "@/app/components/SourcesModal";
+
+type NewsSentimentBucket = "bullish" | "bearish" | "neutral";
+
+const POSITIVE_NEWS_KEYWORDS = [
+  "beat",
+  "beats",
+  "surge",
+  "rally",
+  "upgrade",
+  "growth",
+  "profit",
+  "outperform",
+];
+
+const NEGATIVE_NEWS_KEYWORDS = [
+  "miss",
+  "drop",
+  "decline",
+  "downgrade",
+  "lawsuit",
+  "probe",
+  "cut",
+  "loss",
+];
+
+function inferNewsSentiment(post: Post): NewsSentimentBucket {
+  const raw = String(post.sentiment || "").toLowerCase();
+  if (raw === "bullish" || raw === "positive") return "bullish";
+  if (raw === "bearish" || raw === "negative") return "bearish";
+  if (raw === "neutral") return "neutral";
+
+  const text = `${post.title || ""} ${post.content || ""}`.toLowerCase();
+  let score = 0;
+  POSITIVE_NEWS_KEYWORDS.forEach((word) => {
+    if (text.includes(word)) score += 1;
+  });
+  NEGATIVE_NEWS_KEYWORDS.forEach((word) => {
+    if (text.includes(word)) score -= 1;
+  });
+  if (score > 0) return "bullish";
+  if (score < 0) return "bearish";
+  return "neutral";
+}
 
 export function Community() {
   const { token, user } = useAuth();
+  const { holdings } = usePortfolio();
   const [createPostOpen, setCreatePostOpen] = useState(false);
   const [postContent, setPostContent] = useState("");
   const [postTitle, setPostTitle] = useState("");
@@ -63,8 +113,6 @@ export function Community() {
         tags: string[];
         initials: string;
         time: string;
-        likes: number;
-        dislikes: number;
         comments: number;
       }
     >
@@ -94,6 +142,14 @@ export function Community() {
   const [activitySummary, setActivitySummary] =
     useState<ActivitySummary | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [showSources, setShowSources] = useState(false);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [sourcesData, setSourcesData] = useState<Record<string, NewsArticle[]>>(
+    {},
+  );
+  const [reactions, setReactions] = useState<
+    Record<number, { up: number; down: number; saved: boolean; reposted: boolean }>
+  >({});
 
   // Fetch posts on mount
   useEffect(() => {
@@ -124,6 +180,21 @@ export function Community() {
     if (!token) return;
     loadActivity();
   }, [token]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("community_reactions");
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") setReactions(parsed);
+    } catch {
+      // ignore broken local cache
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("community_reactions", JSON.stringify(reactions));
+  }, [reactions]);
 
   // Listen for global updates from other parts of the app (posts/comments created elsewhere)
   useEffect(() => {
@@ -179,15 +250,27 @@ export function Community() {
       // Transform API posts to include UI fields
       const transformedPosts = data.map((post) => ({
         ...post,
+        hashtags: Array.from(
+          new Set(
+            String(post.content || "")
+              .match(/#[A-Za-z][A-Za-z0-9._-]{0,20}/g)
+              ?.map((t) => t.toUpperCase()) || [],
+          ),
+        ),
+      })).map((post: any) => ({
+        ...post,
         author: post.username || `User ${post.user_id}`,
-        tags: post.stock_ticker ? [post.stock_ticker] : [],
+        tags: Array.from(
+          new Set([
+            ...(post.stock_ticker ? [`#${String(post.stock_ticker).toUpperCase()}`] : []),
+            ...(post.hashtags || []),
+          ]),
+        ),
         initials:
           (post.username && post.username.charAt(0)) ||
           post.user_id?.toString().charAt(0) ||
           "U",
         time: new Date(post.created_at).toLocaleDateString(),
-        likes: Math.floor(Math.random() * 50),
-        dislikes: Math.floor(Math.random() * 5),
         comments: post.comment_count ?? 0,
       }));
       setPosts(transformedPosts);
@@ -200,7 +283,7 @@ export function Community() {
   };
 
   const [trendingTopics, setTrendingTopics] = useState<
-    Array<{ topic: string; posts: number; sentiment?: string }>
+    Array<{ topic: string; posts: number }>
   >([]);
 
   // Load trending topics from backend (top 4 stock tickers by post count)
@@ -210,18 +293,10 @@ export function Community() {
       try {
         const t = await fetchTrendingTopics();
         if (cancelled) return;
-        if (Array.isArray(t) && t.length > 0) {
-          setTrendingTopics(t);
-        } else {
-          setTrendingTopics([
-            { topic: "AI Stocks", posts: 0, sentiment: "Bullish" },
-            { topic: "Market News", posts: 0, sentiment: "Mixed" },
-            { topic: "Energy Sector", posts: 0 },
-            { topic: "Tech Earnings", posts: 0, sentiment: "Bullish" },
-          ]);
-        }
+        setTrendingTopics(Array.isArray(t) ? t : []);
       } catch (err) {
         console.warn("Failed to load trending topics", err);
+        setTrendingTopics([]);
       }
     };
     load();
@@ -252,11 +327,92 @@ export function Community() {
   }, [allowedHashtags, tagSearch, trendingTopics]);
 
   // News and posts display controls
-  const [newsExpanded, setNewsExpanded] = useState(false);
   const [postsExpanded, setPostsExpanded] = useState(false);
 
   const newsPosts = useMemo(() => posts.filter((p) => p.is_news), [posts]);
   const otherPosts = useMemo(() => posts.filter((p) => !p.is_news), [posts]);
+  const topTopic = trendingTopics[0] ?? null;
+  const holdingSymbols = useMemo(
+    () =>
+      new Set(
+        holdings
+          .map((h) => String(h.symbol || "").toUpperCase().trim())
+          .filter(Boolean),
+      ),
+    [holdings],
+  );
+
+  const tailoredNewsPosts = useMemo(
+    () =>
+      newsPosts.filter((p) => {
+        const symbol = String(p.stock_ticker || "").toUpperCase().trim();
+        return symbol && holdingSymbols.has(symbol);
+      }),
+    [newsPosts, holdingSymbols],
+  );
+
+  const newsSentimentCounts = useMemo(() => {
+    const counts: Record<NewsSentimentBucket, number> = {
+      bullish: 0,
+      bearish: 0,
+      neutral: 0,
+    };
+    const source = tailoredNewsPosts.length > 0 ? tailoredNewsPosts : newsPosts;
+    source.forEach((post) => {
+      counts[inferNewsSentiment(post)] += 1;
+    });
+    return counts;
+  }, [tailoredNewsPosts, newsPosts]);
+
+  const openSourcesForHighlights = async () => {
+    setSourcesLoading(true);
+    try {
+      const base = tailoredNewsPosts.length > 0 ? tailoredNewsPosts : newsPosts;
+      const grouped = base.reduce(
+        (acc, post) => {
+          const symbol = String(post.stock_ticker || "Other").toUpperCase();
+          if (!acc[symbol]) acc[symbol] = [];
+          acc[symbol].push(post as NewsArticle);
+          return acc;
+        },
+        {} as Record<string, NewsArticle[]>,
+      );
+      setSourcesData(grouped);
+    } finally {
+      setSourcesLoading(false);
+      setShowSources(true);
+    }
+  };
+
+  const getReactionState = (postId: number) =>
+    reactions[postId] || { up: 0, down: 0, saved: false, reposted: false };
+
+  const toggleVote = (postId: number, direction: "up" | "down") => {
+    setReactions((prev) => {
+      const current = prev[postId] || { up: 0, down: 0, saved: false, reposted: false };
+      const next = { ...current };
+      if (direction === "up") {
+        next.up = current.up > 0 ? 0 : 1;
+      } else {
+        next.down = current.down > 0 ? 0 : 1;
+      }
+      return { ...prev, [postId]: next };
+    });
+  };
+
+  const toggleSaved = (postId: number) => {
+    setReactions((prev) => {
+      const current = prev[postId] || { up: 0, down: 0, saved: false, reposted: false };
+      return { ...prev, [postId]: { ...current, saved: !current.saved } };
+    });
+  };
+
+  const toggleReposted = (postId: number) => {
+    setReactions((prev) => {
+      const current = prev[postId] || { up: 0, down: 0, saved: false, reposted: false };
+      return { ...prev, [postId]: { ...current, reposted: !current.reposted } };
+    });
+  };
 
   const handleCreatePost = async () => {
     if (!token || !postContent.trim() || !postTitle.trim()) return;
@@ -267,9 +423,14 @@ export function Community() {
       const tickerTag = postHashtags.find((t) => /^#[A-Z]{1,5}$/.test(t));
       const ticker = tickerTag ? tickerTag.substring(1) : undefined;
 
+      const normalizedTags = Array.from(
+        new Set(postHashtags.map((t) => t.toUpperCase())),
+      );
+      const tagSuffix = normalizedTags.length ? `\n\n${normalizedTags.join(" ")}` : "";
+
       await createPost(token, {
         title: postTitle,
-        content: postContent,
+        content: `${postContent.trim()}${tagSuffix}`,
         stock_ticker: ticker,
       });
 
@@ -440,8 +601,17 @@ export function Community() {
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
                   setPostContent(e.target.value)
                 }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleCreatePost();
+                  }
+                }}
                 className="mt-2 min-h-[120px]"
               />
+              <p className="mt-1 text-xs text-gray-500">
+                Press Enter to post. Use Shift+Enter for a new line.
+              </p>
             </div>
             <div>
               <Label className="flex items-center gap-2">
@@ -480,25 +650,17 @@ export function Community() {
                     );
                   })}
                 </div>
-              </div>
-            </div>
-            {postContent && (
-              <div className="p-3 bg-gray-50 rounded-lg border">
-                <p className="text-xs font-medium text-gray-500 mb-2">
-                  Preview
-                </p>
-                <p className="text-sm text-gray-700">{postContent}</p>
-                {postHashtags && postHashtags.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-2">
+                {postHashtags.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
                     {postHashtags.map((tag) => (
                       <Badge key={tag} variant="secondary" className="text-xs">
                         {tag}
                       </Badge>
                     ))}
                   </div>
-                )}
+                ) : null}
               </div>
-            )}
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreatePostOpen(false)}>
@@ -544,113 +706,52 @@ export function Community() {
             <Button
               variant="ghost"
               size="sm"
-              className="ml-auto h-6 px-2 text-xs"
+              className="h-6 px-2 text-xs ml-auto text-blue-900 hover:bg-blue-100"
+              onClick={() => {
+                void openSourcesForHighlights();
+              }}
             >
-              <ExternalLink className="w-3 h-3 mr-1" />
               Sources
             </Button>
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Consensus Section - neutral background */}
-          <div className="p-4 bg-white rounded-lg border border-blue-500/20">
-            <p className="text-xs font-semibold text-[#1e40af] uppercase tracking-wider mb-2">
-              Consensus
-            </p>
-            <div className="space-y-3">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-gray-900">
-                    85% of community bullish on NVDA earnings
-                  </span>
-                  <Badge className="bg-emerald-100 text-emerald-800 border-0">
-                    Strong agree
-                  </Badge>
-                </div>
-                <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  You hold 15% of portfolio in NVDA — community optimism aligns
-                  with your position.
-                </p>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-gray-900">
-                    78% bullish on tech sector outlook
-                  </span>
-                  <Badge className="bg-emerald-100 text-emerald-800 border-0">
-                    Agree
-                  </Badge>
-                </div>
-                <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  Your tech holdings represent 65% of portfolio — strong tech
-                  sentiment is favorable.
-                </p>
-              </div>
-            </div>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Badge className="bg-white text-blue-900 border border-blue-200">
+              Discussions {otherPosts.length}
+            </Badge>
+            <Badge className="bg-white text-blue-900 border border-blue-200">
+              Holdings-linked news {tailoredNewsPosts.length}
+            </Badge>
+            <Badge className="bg-white text-blue-900 border border-blue-200">
+              Top topic {topTopic ? `${topTopic.topic} (${topTopic.posts})` : "N/A"}
+            </Badge>
+            <Badge className="bg-green-100 text-green-800 border border-green-200">
+              Bullish {newsSentimentCounts.bullish}
+            </Badge>
+            <Badge className="bg-red-100 text-red-800 border border-red-200">
+              Bearish {newsSentimentCounts.bearish}
+            </Badge>
+            <Badge className="bg-gray-100 text-gray-700 border border-gray-200">
+              Neutral {newsSentimentCounts.neutral}
+            </Badge>
+            <Badge className="bg-white text-blue-900 border border-blue-200">
+              Your activity{" "}
+              {activitySummary
+                ? `${activitySummary.posts}P/${activitySummary.comments}C`
+                : "0P/0C"}
+            </Badge>
           </div>
-
-          {/* Controversy Section - neutral background */}
-          <div className="p-4 bg-white rounded-lg border border-blue-500/20">
-            <p className="text-xs font-semibold text-[#1e40af] uppercase tracking-wider mb-2">
-              Controversy
+          {tailoredNewsPosts.length > 0 ? (
+            <p className="text-xs text-gray-600">
+              Highlights are tailored to your holdings and condensed by default.
+              Open <strong>Sources</strong> to dive into headlines.
             </p>
-            <div className="space-y-3">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-gray-900">
-                    Community split 50/50 on TSLA valuation
-                  </span>
-                  <Badge className="bg-gray-100 text-black border-0">
-                    Divided
-                  </Badge>
-                </div>
-                <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  You recently bought TSLA — consider reviewing due to mixed
-                  sentiment.
-                </p>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-gray-900">
-                    Energy sector showing controversy (45% bullish / 55%
-                    bearish)
-                  </span>
-                  <Badge className="bg-gray-100 text-black border-0">
-                    Mixed
-                  </Badge>
-                </div>
-                <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  Energy sector divided — watch your XOM position closely.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <Separator className="bg-blue-200" />
-
-          {/* Your Content Performance */}
-          <div className="p-4 bg-white rounded-lg border border-blue-500/20">
-            <p className="text-xs font-semibold text-[#1e40af] uppercase tracking-wider mb-2">
-              Your Content Performance
+          ) : (
+            <p className="text-xs text-gray-600">
+              No holdings-specific headlines were found. Sources fallback to broader market discussion.
             </p>
-            <ul className="text-[15px] text-gray-700 space-y-2 list-disc pl-5">
-              <li className="leading-relaxed">
-                Your posts about dividend strategies received the most
-                engagement (avg 45 likes)
-              </li>
-              <li className="leading-relaxed">
-                Your technical analysis posts are trending — 3x more views than
-                average
-              </li>
-              <li className="leading-relaxed">
-                Community finds your earnings commentary most valuable
-              </li>
-            </ul>
-          </div>
+          )}
         </CardContent>
       </Card>
 
@@ -673,51 +774,6 @@ export function Community() {
                 Be the first to share an investment idea!
               </p>
             </div>
-          )}
-
-          {/* News posts (company/news feed) */}
-          {newsPosts.length > 0 && (
-            <Card className="mb-4">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5" />
-                  Company News
-                  <Badge className="ml-auto bg-gray-100 text-gray-800">{newsPosts.length} items</Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {(newsExpanded ? newsPosts : newsPosts.slice(0, 4)).map((post) => (
-                    <a
-                      key={post.id}
-                      href={post.news_url || '#'}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block p-3 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-gray-900">{post.title}</p>
-                          <p className="text-xs text-gray-500">{post.news_source || ''} • {post.news_published_at ? new Date(post.news_published_at).toLocaleString() : ''}</p>
-                        </div>
-                      </div>
-                    </a>
-                  ))}
-
-                  {newsPosts.length > 4 && (
-                    <div className="pt-2">
-                      <Button
-                        variant="default"
-                        className="border-gray-300 text-gray-900 hover:bg-gray-50"
-                        onClick={() => setNewsExpanded((v) => !v)}
-                      >
-                        {newsExpanded ? "Show less" : `Display more (${newsPosts.length - 4})`}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
           )}
 
           {/* Posts List */}
@@ -748,7 +804,11 @@ export function Community() {
                       <h3 className="font-semibold text-gray-900 mb-2">
                         {post.title}
                       </h3>
-                      <p className="text-sm text-gray-600 mb-3">{post.content}</p>
+                      <p className="text-sm text-gray-600 mb-3">
+                        {post.content.length > 220
+                          ? `${post.content.slice(0, 220)}...`
+                          : post.content}
+                      </p>
 
                       {/* Tags */}
                       {Array.isArray(post.tags) && post.tags.length > 0 && (
@@ -763,8 +823,8 @@ export function Community() {
 
                       <Separator className="my-3" />
 
-                      {/* Engagement - Comment, Like, Dislike */}
-                      <div className="flex items-center gap-4 text-sm text-gray-500">
+                      {/* Engagement - Comment, Like, Dislike, Save, Repost */}
+                      <div className="flex items-center gap-4 text-sm text-gray-500 flex-wrap">
                         <button
                           onClick={() => {
                             if (commentsOpen === post.id) {
@@ -783,6 +843,58 @@ export function Community() {
                           <span>
                             {commentsData[post.id]?.length ?? post.comments}
                           </span>
+                        </button>
+
+                        <button
+                          onClick={() => toggleVote(post.id, "up")}
+                          className={`flex items-center gap-1 transition-colors ${
+                            getReactionState(post.id).up > 0
+                              ? "text-green-600"
+                              : "hover:text-green-600"
+                          }`}
+                          title="Like"
+                        >
+                          <ThumbsUp className="w-4 h-4" />
+                          <span>{getReactionState(post.id).up}</span>
+                        </button>
+
+                        <button
+                          onClick={() => toggleVote(post.id, "down")}
+                          className={`flex items-center gap-1 transition-colors ${
+                            getReactionState(post.id).down > 0
+                              ? "text-red-600"
+                              : "hover:text-red-600"
+                          }`}
+                          title="Dislike"
+                        >
+                          <ThumbsDown className="w-4 h-4" />
+                          <span>{getReactionState(post.id).down}</span>
+                        </button>
+
+                        <button
+                          onClick={() => toggleSaved(post.id)}
+                          className={`flex items-center gap-1 transition-colors ${
+                            getReactionState(post.id).saved
+                              ? "text-amber-600"
+                              : "hover:text-amber-600"
+                          }`}
+                          title="Save"
+                        >
+                          <Bookmark className="w-4 h-4" />
+                          <span>{getReactionState(post.id).saved ? "Saved" : "Save"}</span>
+                        </button>
+
+                        <button
+                          onClick={() => toggleReposted(post.id)}
+                          className={`flex items-center gap-1 transition-colors ${
+                            getReactionState(post.id).reposted
+                              ? "text-blue-600"
+                              : "hover:text-blue-600"
+                          }`}
+                          title="Repost"
+                        >
+                          <Repeat2 className="w-4 h-4" />
+                          <span>{getReactionState(post.id).reposted ? "Reposted" : "Repost"}</span>
                         </button>
 
                         <button
@@ -846,7 +958,7 @@ export function Community() {
                                     >
                                       <div className="flex items-start justify-between gap-2">
                                         <span className="font-medium text-gray-700">
-                                          User {comment.user_id}
+                                          {comment.username || `User ${comment.user_id}`}
                                         </span>
                                         {user && user.id === comment.user_id && (
                                           <button
@@ -943,19 +1055,15 @@ export function Community() {
                   >
                     <div className="flex items-center justify-between mb-1">
                       <p className="font-medium text-gray-900">{topic.topic}</p>
-                      <Badge
-                        className={
-                          topic.sentiment === "Bullish"
-                            ? "bg-emerald-100 text-emerald-800 border-0"
-                            : "bg-gray-100 text-black border-0"
-                        }
-                      >
-                        {topic.sentiment}
-                      </Badge>
                     </div>
                     <p className="text-xs text-gray-500">{topic.posts} posts</p>
                   </div>
                 ))}
+                {trendingTopics.length === 0 && (
+                  <p className="text-sm text-gray-500">
+                    No trending topics yet.
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1010,6 +1118,13 @@ export function Community() {
         </div>
       </div>
 
+      <SourcesModal
+        open={showSources}
+        loading={sourcesLoading}
+        sources={sourcesData}
+        onClose={() => setShowSources(false)}
+      />
+
       {/* Post Detail Modal */}
       <Dialog
         open={!!detailPostId}
@@ -1031,7 +1146,7 @@ export function Community() {
                   {detailPost.title}
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  Posted by User {detailPost.user_id} on{" "}
+                  Posted by {detailPost.username || `User ${detailPost.user_id}`} on{" "}
                   {new Date(detailPost.created_at).toLocaleDateString()}
                 </p>
               </div>

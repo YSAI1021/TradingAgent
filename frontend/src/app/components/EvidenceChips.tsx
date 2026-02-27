@@ -7,6 +7,7 @@ export interface EvidenceChipItem {
   source: string;
   evidence: string;
   confidence: EvidenceConfidence;
+  url?: string | null;
 }
 
 const confidenceStyles: Record<EvidenceConfidence, string> = {
@@ -18,37 +19,73 @@ const confidenceStyles: Record<EvidenceConfidence, string> = {
 interface EvidenceChipsProps {
   items: EvidenceChipItem[];
   className?: string;
+  title?: string;
+  showConfidence?: boolean;
 }
 
-export function EvidenceChips({ items, className }: EvidenceChipsProps) {
+export function EvidenceChips({
+  items,
+  className,
+  title = "Evidence Chips",
+  showConfidence = true,
+}: EvidenceChipsProps) {
   if (!items.length) return null;
 
   return (
     <div className={cn("space-y-2", className)}>
       <p className="text-xs font-semibold uppercase tracking-wider text-gray-600">
-        Evidence Chips
+        {title}
       </p>
       <div className="flex flex-wrap gap-2">
-        {items.map((item, index) => (
-          <div
-            key={`${item.source}-${index}`}
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs"
-          >
-            <div className="mb-1 flex items-center gap-2">
-              <Badge variant="outline" className="h-5 px-2 text-[11px]">
-                {item.source}
-              </Badge>
-              <Badge
-                className={cn("h-5 px-2 text-[11px]", confidenceStyles[item.confidence])}
+        {items.map((item, index) => {
+          const content = (
+            <>
+              <div className="mb-1 flex items-center gap-2">
+                <Badge variant="outline" className="h-5 px-2 text-[11px]">
+                  {item.source}
+                </Badge>
+                {showConfidence ? (
+                  <Badge
+                    className={cn(
+                      "h-5 px-2 text-[11px]",
+                      confidenceStyles[item.confidence],
+                    )}
+                  >
+                    {item.confidence}
+                  </Badge>
+                ) : null}
+              </div>
+              <p className="max-w-xs text-[11px] leading-relaxed text-gray-600">
+                {item.evidence}
+              </p>
+            </>
+          );
+
+          const className = cn(
+            "rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs transition-colors",
+            item.url ? "hover:bg-gray-50" : "",
+          );
+
+          if (item.url) {
+            return (
+              <a
+                key={`${item.source}-${index}`}
+                href={item.url}
+                target="_blank"
+                rel="noreferrer"
+                className={className}
               >
-                {item.confidence}
-              </Badge>
+                {content}
+              </a>
+            );
+          }
+
+          return (
+            <div key={`${item.source}-${index}`} className={className}>
+              {content}
             </div>
-            <p className="max-w-xs text-[11px] leading-relaxed text-gray-600">
-              {item.evidence}
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -24,6 +24,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET =
   process.env.JWT_SECRET || "your-secret-key-change-in-production";
+const GEMINI_API_KEY_RAW = String(process.env.GEMINI_API_KEY || "").trim();
+
+if (!GEMINI_API_KEY_RAW || GEMINI_API_KEY_RAW === "YOUR_GEMINI_API_KEY") {
+  console.warn(
+    "[AI] GEMINI_API_KEY is missing or placeholder. AI assistant requests will fail until backend/.env is updated with a real Gemini key.",
+  );
+}
 
 // CORS configuration for production
 const corsOptions = {
@@ -1313,12 +1320,50 @@ app.get("/api/stock/price/:symbol", async (req, res) => {
       const price = result.meta.regularMarketPrice;
 
       if (price) {
+        let fundamentals = null;
+        try {
+          const qResp = await fetch(
+            `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`,
+          );
+          if (qResp.ok) {
+            const qjson = await qResp.json();
+            const quote = qjson?.quoteResponse?.result?.[0];
+            if (quote) {
+              fundamentals = {
+                marketCap:
+                  typeof quote.marketCap === "number" ? quote.marketCap : null,
+                trailingPE:
+                  typeof quote.trailingPE === "number"
+                    ? quote.trailingPE
+                    : null,
+                forwardPE:
+                  typeof quote.forwardPE === "number" ? quote.forwardPE : null,
+                fiftyTwoWeekHigh:
+                  typeof quote.fiftyTwoWeekHigh === "number"
+                    ? quote.fiftyTwoWeekHigh
+                    : null,
+                fiftyTwoWeekLow:
+                  typeof quote.fiftyTwoWeekLow === "number"
+                    ? quote.fiftyTwoWeekLow
+                    : null,
+                averageDailyVolume3Month:
+                  typeof quote.averageDailyVolume3Month === "number"
+                    ? quote.averageDailyVolume3Month
+                    : null,
+              };
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to load quote fundamentals for", symbol, err);
+        }
+
         return res.json({
           symbol,
           price,
           currency: result.meta.currency,
           marketState: result.meta.marketState,
           previousClose: result.meta.previousClose,
+          fundamentals,
         });
       }
     }
@@ -1339,6 +1384,23 @@ app.get("/api/stock/price/:symbol", async (req, res) => {
             currency: quote.currency || null,
             marketState: quote.marketState || null,
             previousClose: typeof quote.regularMarketPreviousClose === 'number' ? quote.regularMarketPreviousClose : null,
+            fundamentals: {
+              marketCap: typeof quote.marketCap === "number" ? quote.marketCap : null,
+              trailingPE: typeof quote.trailingPE === "number" ? quote.trailingPE : null,
+              forwardPE: typeof quote.forwardPE === "number" ? quote.forwardPE : null,
+              fiftyTwoWeekHigh:
+                typeof quote.fiftyTwoWeekHigh === "number"
+                  ? quote.fiftyTwoWeekHigh
+                  : null,
+              fiftyTwoWeekLow:
+                typeof quote.fiftyTwoWeekLow === "number"
+                  ? quote.fiftyTwoWeekLow
+                  : null,
+              averageDailyVolume3Month:
+                typeof quote.averageDailyVolume3Month === "number"
+                  ? quote.averageDailyVolume3Month
+                  : null,
+            },
           });
         }
       }
@@ -1349,6 +1411,181 @@ app.get("/api/stock/price/:symbol", async (req, res) => {
     res.status(404).json({ error: "Price not found" });
   } catch (error) {
     console.error("Error fetching stock price:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get historical close near a specific date (for transaction prefill)
+app.get("/api/stock/close/:symbol", async (req, res) => {
+  try {
+    let { symbol } = req.params;
+    const date = String(req.query.date || "").trim();
+
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: "date (YYYY-MM-DD) is required" });
+    }
+
+    try {
+      symbol = decodeURIComponent(symbol);
+    } catch (e) {
+      /* ignore decode errors */
+    }
+    if (symbol.includes(":") || symbol.includes("/")) {
+      symbol = symbol.split(/[:/]/)[0];
+    }
+    symbol = String(symbol).trim().toUpperCase();
+
+    const target = new Date(`${date}T00:00:00Z`);
+    if (Number.isNaN(target.getTime())) {
+      return res.status(400).json({ error: "Invalid date" });
+    }
+
+    const period1 = Math.floor((target.getTime() - 7 * 24 * 60 * 60 * 1000) / 1000);
+    const period2 = Math.floor((target.getTime() + 2 * 24 * 60 * 60 * 1000) / 1000);
+
+    const response = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&interval=1d`,
+    );
+
+    if (!response.ok) {
+      return res
+        .status(response.status)
+        .json({ error: "Failed to fetch historical close" });
+    }
+
+    const data = await response.json();
+    const result = data?.chart?.result?.[0];
+    const timestamps = result?.timestamp || [];
+    const closes = result?.indicators?.quote?.[0]?.close || [];
+
+    if (!Array.isArray(timestamps) || !Array.isArray(closes) || !timestamps.length) {
+      return res.status(404).json({ error: "Historical close not found" });
+    }
+
+    const targetUtc = new Date(`${date}T23:59:59Z`).getTime();
+    let best = null;
+    for (let i = 0; i < timestamps.length; i++) {
+      const tsMs = Number(timestamps[i]) * 1000;
+      const close = closes[i];
+      if (typeof close !== "number") continue;
+      if (tsMs <= targetUtc) {
+        if (!best || tsMs > best.tsMs) {
+          best = { tsMs, close };
+        }
+      }
+    }
+
+    if (!best) {
+      return res.status(404).json({ error: "No close found before selected date" });
+    }
+
+    res.json({
+      symbol,
+      date,
+      close: best.close,
+      actualDate: new Date(best.tsMs).toISOString().slice(0, 10),
+    });
+  } catch (error) {
+    console.error("Error fetching historical close:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get stock chart data (proxy to avoid CORS issues)
+app.get("/api/stock/chart/:symbol", async (req, res) => {
+  try {
+    let { symbol } = req.params;
+    try {
+      symbol = decodeURIComponent(symbol);
+    } catch (e) {
+      /* ignore decode errors */
+    }
+    if (symbol.includes(":") || symbol.includes("/")) {
+      symbol = symbol.split(/[:/]/)[0];
+    }
+    symbol = String(symbol).trim().toUpperCase();
+
+    const requestedRange = String(req.query.range || "1mo");
+    const requestedInterval = String(req.query.interval || "1d");
+    const allowedRanges = new Set([
+      "1d",
+      "5d",
+      "1mo",
+      "3mo",
+      "6mo",
+      "ytd",
+      "1y",
+      "2y",
+      "5y",
+      "10y",
+      "max",
+    ]);
+    const allowedIntervals = new Set([
+      "1m",
+      "2m",
+      "5m",
+      "15m",
+      "30m",
+      "60m",
+      "90m",
+      "1h",
+      "1d",
+      "5d",
+      "1wk",
+      "1mo",
+      "3mo",
+    ]);
+    const range = allowedRanges.has(requestedRange) ? requestedRange : "1mo";
+    const interval = allowedIntervals.has(requestedInterval)
+      ? requestedInterval
+      : "1d";
+
+    const yahooUrl =
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+      `?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}`;
+
+    const response = await fetch(yahooUrl, {
+      headers: { "User-Agent": "TradingAgent/1.0" },
+    });
+    if (!response.ok) {
+      return res
+        .status(response.status)
+        .json({ error: "Failed to fetch chart data" });
+    }
+
+    const data = await response.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) {
+      return res.status(404).json({ error: "Chart data unavailable" });
+    }
+
+    const timestamps = result?.timestamp || [];
+    const closes = result?.indicators?.quote?.[0]?.close || [];
+    const previousClose = result?.meta?.previousClose ?? null;
+
+    const points = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const close = closes[i];
+      if (typeof close !== "number") continue;
+      points.push({
+        timestamp: timestamps[i],
+        close,
+      });
+    }
+
+    if (!points.length) {
+      return res.status(404).json({ error: "No chart points available" });
+    }
+
+    res.json({
+      symbol,
+      range,
+      interval,
+      previousClose,
+      points,
+    });
+  } catch (error) {
+    console.error("Error fetching stock chart:", error);
     res.status(500).json({ error: "Server error" });
   }
 });

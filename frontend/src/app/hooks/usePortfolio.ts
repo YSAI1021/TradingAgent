@@ -12,6 +12,11 @@ const SYMBOL_METADATA: Record<string, { name: string; sector: string }> = {
   GOOGL: { name: "Alphabet Inc.", sector: "Technology" },
   META: { name: "Meta Platforms", sector: "Technology" },
   AAPL: { name: "Apple Inc.", sector: "Technology" },
+  AMZN: { name: "Amazon.com Inc.", sector: "Consumer Discretionary" },
+  UNH: { name: "UnitedHealth Group", sector: "Healthcare" },
+  XOM: { name: "Exxon Mobil Corp.", sector: "Energy" },
+  CVX: { name: "Chevron Corp.", sector: "Energy" },
+  JNJ: { name: "Johnson & Johnson", sector: "Healthcare" },
   JPM: { name: "JPMorgan Chase", sector: "Finance" },
 };
 
@@ -37,11 +42,22 @@ export type Holding = {
 
 export function usePortfolio() {
   const { token, isAuthenticated } = useAuth();
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [backendHoldings, setBackendHoldings] = useState<
     Array<{ symbol: string; shares: number; averageCost: number }>
   >([]);
   const [portfolioLoading, setPortfolioLoading] = useState(isAuthenticated);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onPortfolioUpdated = () => setRefreshNonce((v) => v + 1);
+    window.addEventListener("portfolio:updated", onPortfolioUpdated as EventListener);
+    return () =>
+      window.removeEventListener(
+        "portfolio:updated",
+        onPortfolioUpdated as EventListener,
+      );
+  }, []);
 
   // Fetch portfolio summary from backend
   useEffect(() => {
@@ -72,7 +88,7 @@ export function usePortfolio() {
         );
       })
       .finally(() => setPortfolioLoading(false));
-  }, [isAuthenticated, token]);
+  }, [isAuthenticated, token, refreshNonce]);
 
   // Get stock quotes for the symbols in the portfolio
   const symbolsToFetch = backendHoldings.map((h) => h.symbol);

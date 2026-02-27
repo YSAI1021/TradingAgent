@@ -1,9 +1,47 @@
 // API Service for communicating with the backend
 const API_BASE_URL =
   (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+const AUTH_TOKEN_STORAGE_KEY = "auth_token";
+const AUTH_USER_STORAGE_KEY = "auth_user";
+
+export class ApiError extends Error {
+  status: number;
+  details: Record<string, unknown>;
+
+  constructor(
+    message: string,
+    status: number,
+    details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.details = details;
+  }
+}
 
 export interface ApiRequestConfig extends RequestInit {
   token?: string;
+}
+
+function shouldClearAuthSession(
+  status: number,
+  errorData: Record<string, unknown>,
+): boolean {
+  if (status !== 401 && status !== 403) return false;
+  const message = `${String(errorData.error || "")} ${String(errorData.message || "")}`.toLowerCase();
+  return (
+    message.includes("invalid or expired token") ||
+    message.includes("access token required") ||
+    message.includes("jwt")
+  );
+}
+
+function clearAuthSession(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+  window.dispatchEvent(new CustomEvent("auth:invalid-token"));
 }
 
 // Helper function to make authenticated API calls
@@ -32,8 +70,20 @@ async function apiCall<T>(
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `API Error: ${response.status}`);
+    const errorData = (await response.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+
+    if (token && shouldClearAuthSession(response.status, errorData)) {
+      clearAuthSession();
+    }
+
+    const message =
+      String(errorData.error || "") ||
+      String(errorData.message || "") ||
+      `API Error: ${response.status}`;
+    throw new ApiError(message, response.status, errorData);
   }
 
   return response.json();
@@ -113,6 +163,27 @@ export interface StockPrice {
   currency: string;
   marketState: string;
   previousClose: number;
+  fundamentals?: {
+    marketCap: number | null;
+    trailingPE: number | null;
+    forwardPE: number | null;
+    fiftyTwoWeekHigh: number | null;
+    fiftyTwoWeekLow: number | null;
+    averageDailyVolume3Month: number | null;
+  } | null;
+}
+
+export interface StockChartPoint {
+  timestamp: number;
+  close: number;
+}
+
+export interface StockChartResponse {
+  symbol: string;
+  range: string;
+  interval: string;
+  previousClose: number | null;
+  points: StockChartPoint[];
 }
 
 export async function fetchStockPrice(
@@ -123,6 +194,35 @@ export async function fetchStockPrice(
     method: "GET",
     token,
   });
+}
+
+export async function fetchStockChart(
+  symbol: string,
+  range: string,
+  interval: string,
+): Promise<StockChartResponse> {
+  const query = new URLSearchParams({ range, interval }).toString();
+  return apiCall<StockChartResponse>(
+    `/api/stock/chart/${encodeURIComponent(symbol)}?${query}`,
+    {
+      method: "GET",
+    },
+  );
+}
+
+export async function fetchHistoricalClose(
+  symbol: string,
+  date: string,
+  token?: string,
+): Promise<{ symbol: string; date: string; close: number; actualDate: string }> {
+  const query = new URLSearchParams({ date }).toString();
+  return apiCall<{ symbol: string; date: string; close: number; actualDate: string }>(
+    `/api/stock/close/${encodeURIComponent(symbol)}?${query}`,
+    {
+      method: "GET",
+      token,
+    },
+  );
 }
 
 // Fetch allowed tags for posts
@@ -220,6 +320,8 @@ export interface Post {
   news_source?: string;
   news_published_at?: string;
   news_image_url?: string;
+  sentiment?: "bullish" | "bearish" | "neutral" | string;
+  sentiment_confidence?: number;
   created_at: string;
   updated_at: string;
   comment_count?: number;
@@ -336,6 +438,7 @@ export interface Comment {
   id: number;
   post_id: number;
   user_id: number;
+  username?: string;
   parent_comment_id?: number;
   content: string;
   created_at: string;
@@ -407,7 +510,7 @@ export interface NewsArticle extends Post {
 }
 
 export async function fetchNews(ticker?: string): Promise<NewsArticle[]> {
-  const query = ticker ? `?ticker=${ticker}` : "";
+  const query = ticker ? `?stock_ticker=${encodeURIComponent(ticker)}` : "";
   return apiCall<NewsArticle[]>(`/api/news${query}`, {
     method: "GET",
   });
@@ -469,12 +572,17 @@ export async function chatWithAI(
     averageCost: number;
     currentPrice?: number;
   }>,
+  apiKey?: string,
 ): Promise<ChatResponse> {
-  const endpoint = token ? "/api/ai/chat" : "/api/ai/copilot";
-  return apiCall<ChatResponse>(endpoint, {
+  const payload = JSON.stringify({ messages, portfolio, apiKey });
+
+  // Keep Copilot stable even when auth tokens rotate/expire:
+  // use the public copilot endpoint with explicit portfolio payload.
+  // This avoids triggering global auth invalidation from /api/ai/chat failures.
+  void token;
+  return apiCall<ChatResponse>("/api/ai/copilot", {
     method: "POST",
-    token,
-    body: JSON.stringify({ messages, portfolio }),
+    body: payload,
   });
 }
 

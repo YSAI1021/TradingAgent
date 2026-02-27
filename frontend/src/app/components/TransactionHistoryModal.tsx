@@ -20,6 +20,7 @@ interface TransactionHistoryModalProps {
   ticker: string;
   companyName: string;
   currentPrice: number;
+  onPortfolioUpdated?: () => void;
 }
 
 export function TransactionHistoryModal({
@@ -28,6 +29,7 @@ export function TransactionHistoryModal({
   ticker,
   companyName,
   currentPrice,
+  onPortfolioUpdated,
 }: TransactionHistoryModalProps) {
   const { token } = useAuth();
   const [transactions, setTransactions] = useState<PortfolioTransaction[]>([]);
@@ -63,26 +65,15 @@ export function TransactionHistoryModal({
     setDeleting(transactionId);
     try {
       await deletePortfolioTransaction(token!, transactionId);
-      await loadTransactions();
+      setTransactions((prev) => prev.filter((txn) => txn.id !== transactionId));
+      onPortfolioUpdated?.();
+      window.dispatchEvent(new CustomEvent("portfolio:updated"));
     } catch (err) {
       console.error("Error deleting transaction:", err);
     } finally {
       setDeleting(null);
     }
   };
-
-  const totalInvested = transactions.reduce(
-    (sum, t) => sum + t.shares * t.purchasePrice,
-    0,
-  );
-  const currentValue = transactions.reduce(
-    (sum, t) => sum + t.shares * currentPrice,
-    0,
-  );
-  const overallGainLoss =
-    totalInvested > 0
-      ? ((currentValue - totalInvested) / totalInvested) * 100
-      : 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -105,16 +96,18 @@ export function TransactionHistoryModal({
           ) : (
             <>
               <div className="rounded-lg border border-gray-200 overflow-hidden">
-                <div className="grid grid-cols-7 gap-2 px-4 py-3 text-xs font-medium text-gray-500 bg-gray-50 border-b">
-                  <div>Date</div>
-                  <div>Type</div>
-                  <div className="text-right">Shares</div>
-                  <div className="text-right">Price</div>
-                  <div className="text-right">Total</div>
-                  <div className="text-right">Gain/Loss %</div>
-                  <div className="text-right">Action</div>
-                </div>
-                {transactions.map((txn) => {
+                <div className="overflow-x-auto">
+                  <div className="min-w-[760px]">
+                    <div className="grid grid-cols-7 gap-3 px-4 py-3 text-xs font-medium text-gray-500 bg-gray-50 border-b">
+                      <div>Date</div>
+                      <div>Type</div>
+                      <div className="text-right">Shares</div>
+                      <div className="text-right">Price</div>
+                      <div className="text-right">Total</div>
+                      <div className="text-right">Gain/Loss %</div>
+                      <div className="text-right">Action</div>
+                    </div>
+                    {transactions.map((txn) => {
                   const gainLoss =
                     txn.price_per_share > 0
                       ? ((currentPrice - txn.price_per_share) /
@@ -124,55 +117,57 @@ export function TransactionHistoryModal({
                   const totalCost = txn.shares * txn.price_per_share;
                   const transactionDate = new Date(txn.transaction_date);
 
-                  return (
-                    <div
-                      key={txn.id}
-                      className="grid grid-cols-7 gap-2 px-4 py-3 text-sm border-b last:border-b-0 hover:bg-gray-50 items-center"
-                    >
-                      <div>{transactionDate.toLocaleDateString()}</div>
-                      <div className="capitalize">
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-medium ${
-                            txn.transaction_type === "buy"
-                              ? "bg-green-100 text-green-800"
-                              : "bg-red-100 text-red-800"
+                    return (
+                      <div
+                        key={txn.id}
+                        className="grid grid-cols-7 gap-3 px-4 py-3 text-sm border-b last:border-b-0 hover:bg-gray-50 items-center"
+                      >
+                        <div>{transactionDate.toLocaleDateString()}</div>
+                        <div className="capitalize">
+                          <span
+                            className={`px-2 py-1 rounded text-xs font-medium ${
+                              txn.transaction_type === "buy"
+                                ? "bg-green-100 text-green-800"
+                                : "bg-red-100 text-red-800"
+                            }`}
+                          >
+                            {txn.transaction_type}
+                          </span>
+                        </div>
+                        <div className="text-right">{txn.shares}</div>
+                        <div className="text-right">
+                          ${txn.price_per_share.toFixed(2)}
+                        </div>
+                        <div className="text-right">${totalCost.toFixed(2)}</div>
+                        <div
+                          className={`text-right font-medium ${
+                            gainLoss >= 0 ? "text-green-600" : "text-red-600"
                           }`}
                         >
-                          {txn.transaction_type}
-                        </span>
+                          {gainLoss >= 0 ? "+" : ""}
+                          {gainLoss.toFixed(2)}%
+                        </div>
+                        <div className="text-right flex justify-end">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteTransaction(txn.id)}
+                            disabled={deleting === txn.id}
+                            className="h-6 w-6 p-0"
+                            title="Delete transaction"
+                          >
+                            {deleting === txn.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4 text-red-600 hover:text-red-800" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
-                      <div className="text-right">{txn.shares}</div>
-                      <div className="text-right">
-                        ${txn.price_per_share.toFixed(2)}
-                      </div>
-                      <div className="text-right">${totalCost.toFixed(2)}</div>
-                      <div
-                        className={`text-right font-medium ${
-                          gainLoss >= 0 ? "text-green-600" : "text-red-600"
-                        }`}
-                      >
-                        {gainLoss >= 0 ? "+" : ""}
-                        {gainLoss.toFixed(2)}%
-                      </div>
-                      <div className="text-right flex justify-end">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteTransaction(txn.id)}
-                          disabled={deleting === txn.id}
-                          className="h-6 w-6 p-0"
-                          title="Delete transaction"
-                        >
-                          {deleting === txn.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-4 h-4 text-red-600 hover:text-red-800" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                  </div>
+                </div>
               </div>
 
               <div className="p-4 rounded-lg bg-gray-50 border border-gray-200 space-y-2">

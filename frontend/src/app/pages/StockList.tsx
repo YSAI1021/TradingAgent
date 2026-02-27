@@ -19,9 +19,8 @@ import {
   TrendingDown,
   Minus,
   Star,
-  Plus,
-  Search,
   Pencil,
+  Search,
 } from "lucide-react";
 import {
   Card,
@@ -40,6 +39,21 @@ import {
 } from "@/app/components/ui/tabs";
 import { AddTransactionModal } from "@/app/components/AddTransactionModal";
 
+const SYMBOL_SECTOR_FALLBACK: Record<string, string> = {
+  AAPL: "Technology",
+  MSFT: "Technology",
+  GOOGL: "Technology",
+  AMZN: "Consumer Discretionary",
+  META: "Technology",
+  NVDA: "Technology",
+  TSLA: "Auto",
+  UNH: "Healthcare",
+  XOM: "Energy",
+  CVX: "Energy",
+  JNJ: "Healthcare",
+  JPM: "Finance",
+};
+
 export function StockList() {
   const [addTransactionOpen, setAddTransactionOpen] = useState(false);
   const { token } = useAuth();
@@ -51,13 +65,6 @@ export function StockList() {
     change: h.changePercent,
     value: h.value,
   }));
-  const watchlistMeta = [
-    { symbol: "AMD", name: "AMD Inc.", sector: "Technology" },
-    { symbol: "COIN", name: "Coinbase", sector: "Technology" },
-    { symbol: "PLTR", name: "Palantir Technologies", sector: "Technology" },
-    { symbol: "SHOP", name: "Shopify Inc.", sector: "Technology" },
-    { symbol: "SQ", name: "Block Inc.", sector: "Technology" },
-  ];
 
   // Load custom watchlist and mode from localStorage
   const [customWatchlist, setCustomWatchlist] = useState<string[]>([]);
@@ -69,7 +76,6 @@ export function StockList() {
   >([]);
   const [searching, setSearching] = useState(false);
   const [posts, setPosts] = useState<Post[]>([]);
-  const [newsStatus, setNewsStatus] = useState("");
   const [newsCache, setNewsCache] = useState<Record<string, NewsArticle[]>>({});
   const [hoverNews, setHoverNews] = useState<{
     ticker: string | null;
@@ -152,9 +158,25 @@ export function StockList() {
   }, [searchQuery]);
 
   const autoStockList = useMemo(() => {
-    // Use a fixed auto list — do not derive from posts or make dynamic
-    return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
-  }, []);
+    const holdingSymbols = currentHoldings.map((h) => h.symbol);
+    const postFrequency = new Map<string, number>();
+
+    posts.forEach((p) => {
+      const ticker = p.stock_ticker?.trim().toUpperCase();
+      if (!ticker) return;
+      postFrequency.set(ticker, (postFrequency.get(ticker) || 0) + 1);
+    });
+
+    const topFromPosts = Array.from(postFrequency.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([ticker]) => ticker)
+      .slice(0, 8);
+
+    return Array.from(new Set([...holdingSymbols, ...topFromPosts])).slice(
+      0,
+      12,
+    );
+  }, [currentHoldings, posts]);
 
   const stockListSymbols = useMemo(() => {
     if (watchlistMode === "custom") return customWatchlist;
@@ -189,12 +211,16 @@ export function StockList() {
     };
   }, [stockListSymbols.join(",")]);
 
-  // Build metadata-aware watchlist using live quotes
-  const watchlist = watchlistMeta.map((w) => ({
-    ...w,
-    price: quotes[w.symbol]?.price ?? 0,
-    change: quotes[w.symbol]?.changePercent ?? 0,
-  }));
+  const holdingMeta = useMemo(
+    () =>
+      Object.fromEntries(
+        currentHoldings.map((h) => [
+          h.symbol,
+          { name: h.name, sector: h.sector },
+        ]),
+      ),
+    [currentHoldings],
+  );
 
   const handleAddStock = (ticker: string) => {
     const symbol = ticker.toUpperCase().trim();
@@ -404,14 +430,7 @@ export function StockList() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle>Current Holdings</CardTitle>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setAddTransactionOpen(true)}
-                >
-                  <Pencil className="w-4 h-4 mr-2" />
-                  Edit Holdings
-                </Button>
+                <div />
               </div>
             </CardHeader>
             <CardContent>
@@ -513,12 +532,15 @@ export function StockList() {
                 <div />
                 {watchlistMode === "custom" && (
                   <div className="flex items-center gap-2">
-                    <button
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => setIsEditMode((s) => !s)}
-                      className={`px-3 py-1 rounded ${isEditMode ? "bg-green-100" : "bg-white"}`}
+                      className={isEditMode ? "bg-green-50 border-green-300" : ""}
                     >
-                      ✎ Edit
-                    </button>
+                      <Pencil className="w-4 h-4 mr-2" />
+                      {isEditMode ? "Done" : "Edit"}
+                    </Button>
                   </div>
                 )}
               </div>
@@ -528,11 +550,12 @@ export function StockList() {
                   <p className="text-sm text-gray-500">No stocks to display</p>
                 ) : (
                   stockListSymbols.map((symbol) => {
-                    const meta = watchlist.find((w) => w.symbol === symbol);
+                    const meta = holdingMeta[symbol];
                     const name = meta?.name || symbol;
-                    const sector = meta?.sector || "Unknown";
+                    const sector = meta?.sector || SYMBOL_SECTOR_FALLBACK[symbol] || "Other";
                     const price = quotes[symbol]?.price ?? 0;
-                                    const change = periodChanges[symbol] ?? quotes[symbol]?.changePercent ?? 0;
+                    const change =
+                      periodChanges[symbol] ?? quotes[symbol]?.changePercent ?? 0;
 
                     return (
                       <Link
@@ -628,7 +651,7 @@ export function StockList() {
           onOpenChange={setAddTransactionOpen}
           onSuccess={() => {
             setAddTransactionOpen(false);
-            window.location.reload();
+            window.dispatchEvent(new CustomEvent("portfolio:updated"));
           }}
           token={token}
         />
