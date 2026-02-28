@@ -29,7 +29,13 @@ export function Login() {
       await login(username, password);
       navigate("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      const base = err instanceof Error ? err.message : "Login failed";
+      const normalized =
+        base.toLowerCase().includes("failed to fetch") ||
+        base.toLowerCase().includes("network")
+          ? "Cannot reach backend API. Ensure backend is running at VITE_API_URL."
+          : base;
+      setError(normalized);
     } finally {
       setLoading(false);
     }
@@ -89,7 +95,7 @@ export function Login() {
             <Button
               type="submit"
               className="w-full"
-              disabled={loading || !username || !password}
+              disabled={loading}
             >
               {loading ? (
                 <>

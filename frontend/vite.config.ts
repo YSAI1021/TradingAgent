@@ -13,6 +13,11 @@ export default defineConfig({
       },
     },
   },
+  preview: {
+    // Railway exposes a public host that is not known at build time.
+    // Allow preview server to accept that host in production deployment.
+    allowedHosts: true,
+  },
   plugins: [
     // The React and Tailwind plugins are both required for Make, even if
     // Tailwind is not being actively used – do not remove them

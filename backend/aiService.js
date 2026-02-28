@@ -3,6 +3,34 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 // Initialize Google Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
 
+const GEMINI_PLACEHOLDER_KEY = 'YOUR_GEMINI_API_KEY'
+
+const sanitizeApiKey = (value) => {
+  if (!value) return ''
+  const trimmed = String(value).trim()
+  return trimmed.replace(/^['"]|['"]$/g, '')
+}
+
+const isConfiguredApiKey = (key) => {
+  if (!key) return false
+  if (key === GEMINI_PLACEHOLDER_KEY) return false
+  // Gemini keys from AI Studio currently start with "AIza"
+  return key.startsWith('AIza') && key.length >= 30
+}
+
+const resolveGeminiApiKey = (requestApiKey) => {
+  const cleanedRequestKey = sanitizeApiKey(requestApiKey)
+  const cleanedEnvKey = sanitizeApiKey(process.env.GEMINI_API_KEY)
+
+  if (isConfiguredApiKey(cleanedRequestKey)) {
+    return cleanedRequestKey
+  }
+  if (isConfiguredApiKey(cleanedEnvKey)) {
+    return cleanedEnvKey
+  }
+  return ''
+}
+
 /**
  * Common stock ticker patterns for extraction
  */
@@ -108,12 +136,12 @@ export const extractTickers = (message) => {
 export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
   try {
     // Check if API key exists (use provided key or fallback to env)
-    const geminiApiKey = apiKey || process.env.GEMINI_API_KEY
+    const geminiApiKey = resolveGeminiApiKey(apiKey)
     if (!geminiApiKey) {
       return {
         success: false,
         error: 'Gemini API key not configured',
-        message: 'Please set your Gemini API key in Settings to use the AI Assistant.',
+        message: 'Gemini API key is missing or placeholder. Set a real GEMINI_API_KEY in backend/.env (not YOUR_GEMINI_API_KEY) or provide a valid apiKey from the client, then restart the backend.',
       }
     }
 
@@ -186,15 +214,31 @@ export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
   } catch (error) {
     console.error('Gemini chat error:', error)
 
-    if (error.message && error.message.includes('API key')) {
+    const errorMessage = String(error?.message || '').toLowerCase()
+    const statusCode = Number(error?.status || 0)
+
+    if (
+      (statusCode === 403 && errorMessage.includes('reported as leaked')) ||
+      errorMessage.includes('api key not valid') ||
+      errorMessage.includes('invalid api key')
+    ) {
       return {
         success: false,
-        error: 'Invalid Gemini API key',
-        message: 'AI service is misconfigured. Please contact administrator.',
+        error: 'Gemini API key is blocked or invalid',
+        message:
+          'The Gemini API key is blocked (for example: leaked/revoked) or invalid. Create a new key in Google AI Studio and update GEMINI_API_KEY in backend/.env.',
       }
     }
 
-    if (error.message && error.message.includes('quota')) {
+    if (errorMessage.includes('api key')) {
+      return {
+        success: false,
+        error: 'Invalid Gemini API key',
+        message: 'Gemini API key validation failed. Update GEMINI_API_KEY in backend/.env or provide a valid key from the client.',
+      }
+    }
+
+    if (errorMessage.includes('quota') || statusCode === 429) {
       return {
         success: false,
         error: 'Gemini quota exceeded',
@@ -231,6 +275,9 @@ Guidelines:
 - IMPORTANT: When giving recommendations, consider the user's CURRENT PORTFOLIO holdings listed below
 - IMPORTANT: When relevant news is provided below, USE IT to support your analysis with specific citations
 - When citing news, mention the source and provide context from the article
+- Respect data privacy: never expose private portfolio details that are not needed to answer the question
+- Evidence Mode is mandatory: end each response with 2-4 compact evidence bullets in this format:
+  Source | Evidence | Confidence (High/Medium/Low)
 `
 
   // Add detailed portfolio context if available
@@ -284,7 +331,7 @@ Guidelines:
   // Add news context if available
   if (context.news && context.news.length > 0) {
     prompt += `\n\n=== RECENT NEWS FOR RELEVANT STOCKS ===`
-    prompt += `\nUse the following recent news to support your analysis. Cite sources when referencing this information.\n`
+    prompt += `\nUse the following retrieved news context (RAG) to support your analysis. Cite sources when referencing this information.\n`
 
     context.news.forEach((article, index) => {
       prompt += `\n[${index + 1}] ${article.stock_ticker ? `$${article.stock_ticker}` : 'General'}`
@@ -307,6 +354,7 @@ Guidelines:
     prompt += `\n- Cite the source by name (e.g., "According to [Source]...")`
     prompt += `\n- Mention the sentiment if relevant`
     prompt += `\n- Provide the article URL for users to read more`
+    prompt += `\n- Include confidence labels (High/Medium/Low) in the final evidence bullets`
   }
 
   prompt += `\nAlways remind users that you provide educational information only, not financial advice.`
@@ -347,7 +395,7 @@ const classifyStock = (symbol) => {
  */
 export const analyzeNewsSentiment = async (title, content, stockTicker = null, apiKey = null) => {
   try {
-    const geminiApiKey = apiKey || process.env.GEMINI_API_KEY
+    const geminiApiKey = resolveGeminiApiKey(apiKey)
     if (!geminiApiKey) {
       return { sentiment: 'neutral', confidence: 0 }
     }

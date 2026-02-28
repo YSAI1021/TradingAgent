@@ -3,8 +3,6 @@ import {
   Sparkles,
   TrendingUp,
   AlertTriangle,
-  Target,
-  ExternalLink,
   Pencil,
 } from "lucide-react";
 import { useAuth } from "@/app/context/AuthContext";
@@ -117,6 +115,27 @@ export function Portfolio() {
     name: string;
   } | null>(null);
   const [addTransactionOpen, setAddTransactionOpen] = useState(false);
+  const sortedByAllocation = [...holdings].sort(
+    (a, b) => b.allocation - a.allocation,
+  );
+  const topHolding = sortedByAllocation[0] ?? null;
+  const profitableCount = holdings.filter(
+    (h) => h.currentPrice > h.avgCost,
+  ).length;
+  const losingCount = holdings.filter((h) => h.currentPrice < h.avgCost).length;
+  const weightedMoveEstimate = holdings.reduce(
+    (sum, h) => sum + (h.allocation / 100) * (h.changePercent || 0),
+    0,
+  );
+  const keyDrivers = [...holdings]
+    .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+    .slice(0, 3);
+  const concentrationRisk =
+    topHolding && topHolding.allocation >= 40
+      ? "High"
+      : topHolding && topHolding.allocation >= 25
+        ? "Medium"
+        : "Low";
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -141,7 +160,7 @@ export function Portfolio() {
           className="self-start sm:self-center"
         >
           <Pencil className="w-4 h-4 mr-2" />
-          Edit Holdings
+          Add Holdings
         </Button>
       </div>
 
@@ -150,61 +169,75 @@ export function Portfolio() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
-            AI Weekly Recap
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-6 px-2 text-xs"
-            >
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
+            Portfolio Brief
           </CardTitle>
         </CardHeader>
         <CardContent className="text-blue-900">
-          <div className="space-y-3">
-            <div className="flex items-start gap-3">
-              <TrendingUp className="w-5 h-5 mt-0.5 flex-shrink-0" />
-              <p className="font-medium">Portfolio up 5.2% this week</p>
-            </div>
-
-            <div className="p-4 rounded-lg bg-white border border-blue-500/20 mt-4">
-              <p className="text-xs font-semibold text-[#1e40af] uppercase tracking-wider mb-2">
-                Insight
-              </p>
-              <p className="text-sm leading-relaxed text-gray-700 mb-3">
-                Driven by strong tech earnings and energy recovery. Your
-                portfolio outperformed S&P 500 by 2.1% this week. Consider
-                rebalancing tech allocation which has grown to 65% of total
-                holdings.
-              </p>
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <span>12 articles analyzed</span>
-                <span>•</span>
-                <span>5 earnings reports reviewed</span>
+          {holdings.length === 0 ? (
+            <p className="text-sm text-gray-700">
+              No holdings available yet. Add transactions to generate a portfolio recap.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="bg-white text-blue-900 border border-blue-200">
+                  <TrendingUp className="mr-1 h-3 w-3" />
+                  Holdings {holdings.length}
+                </Badge>
+                <Badge className="bg-white text-blue-900 border border-blue-200">
+                  Top {topHolding?.symbol ?? "N/A"} {topHolding?.allocation.toFixed(1) ?? "0.0"}%
+                </Badge>
+                <Badge className="bg-white text-blue-900 border border-blue-200">
+                  Profit {profitableCount}
+                </Badge>
+                <Badge className="bg-white text-blue-900 border border-blue-200">
+                  Loss {losingCount}
+                </Badge>
+                <Badge className="bg-white text-blue-900 border border-blue-200">
+                  Risk {concentrationRisk}
+                </Badge>
               </div>
-            </div>
-
-            <Separator className="bg-blue-200" />
-
-            <div className="flex items-start gap-3">
-              <Target className="w-5 h-5 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="font-medium">Key Drivers</p>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <Badge variant="secondary" className="bg-white">
-                    Tech: +7.1%
-                  </Badge>
-                  <Badge variant="secondary" className="bg-white">
-                    Finance: +2.3%
-                  </Badge>
-                  <Badge variant="secondary" className="bg-white">
-                    Energy: -1.2%
-                  </Badge>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="rounded border border-blue-200 bg-white p-3">
+                  <p className="text-xs text-gray-500">Weekly Change (Est.)</p>
+                  <p
+                    className={`font-medium ${
+                      weightedMoveEstimate >= 0 ? "text-green-700" : "text-red-700"
+                    }`}
+                  >
+                    {weightedMoveEstimate >= 0 ? "+" : ""}
+                    {weightedMoveEstimate.toFixed(2)}%
+                  </p>
+                </div>
+                <div className="rounded border border-blue-200 bg-white p-3 md:col-span-2">
+                  <p className="text-xs text-gray-500 mb-1">AI-generated Insight</p>
+                  <p className="text-sm text-gray-700">
+                    {topHolding
+                      ? `${topHolding.symbol} is your largest position at ${topHolding.allocation.toFixed(1)}%. Keep this weight aligned with conviction and risk budget.`
+                      : "Add holdings to unlock concentration and momentum insight."}
+                  </p>
                 </div>
               </div>
+              <div className="rounded border border-blue-200 bg-white p-3">
+                <p className="text-xs text-gray-500 mb-2">Key Drivers</p>
+                {keyDrivers.length === 0 ? (
+                  <p className="text-sm text-gray-600">No holdings yet.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {keyDrivers.map((h) => (
+                      <Badge
+                        key={`driver-${h.symbol}`}
+                        className="bg-white text-blue-900 border border-blue-200"
+                      >
+                        {h.symbol} {h.changePercent >= 0 ? "+" : ""}
+                        {h.changePercent.toFixed(2)}%
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 
@@ -339,6 +372,9 @@ export function Portfolio() {
             holdings.find((h) => h.symbol === transactionModal.ticker)
               ?.currentPrice ?? 0
           }
+          onPortfolioUpdated={() =>
+            window.dispatchEvent(new CustomEvent("portfolio:updated"))
+          }
         />
       )}
 
@@ -346,7 +382,9 @@ export function Portfolio() {
         <AddTransactionModal
           open={addTransactionOpen}
           onOpenChange={setAddTransactionOpen}
-          onSuccess={() => window.location.reload()}
+          onSuccess={() =>
+            window.dispatchEvent(new CustomEvent("portfolio:updated"))
+          }
           token={token}
         />
       )}

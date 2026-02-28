@@ -28,7 +28,6 @@ import { Separator } from "@/app/components/ui/separator";
 import { Link } from "react-router";
 import { useState, useMemo } from "react";
 import { Button } from "@/app/components/ui/button";
-import { ActionWorkflow } from "@/app/components/ActionWorkflow";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,13 +36,8 @@ import {
 } from "@/app/components/ui/dropdown-menu";
 
 export function Dashboard() {
-  const [actionWorkflowOpen, setActionWorkflowOpen] = useState(false);
   const [visibleCounter, setVisibleCounter] = useState(0);
   const hiddenAtRef = useRef<number | null>(null);
-  const [selectedAction, setSelectedAction] = useState<{
-    symbol: string;
-    type: "success" | "warning" | "alert";
-  } | null>(null);
 
   // Dashboard tiles visibility state (persisted in localStorage or DB for logged-in users)
   const { token, isAuthenticated } = useAuth();
@@ -159,6 +153,7 @@ export function Dashboard() {
           what: "No holdings detected",
           why: "Add transactions to build your portfolio",
           action: "warning" as const,
+          tags: ["No holdings"],
         },
       ];
     }
@@ -197,6 +192,11 @@ export function Dashboard() {
         what: stockWhat,
         why: stockWhy,
         action: topMover && (topMover.change ?? 0) > 0 ? "success" : "warning",
+        tags: [
+          topMover?.symbol || topHolding.symbol,
+          topMover && (topMover.change ?? 0) >= 0 ? "Up move" : "Down move",
+          "Daily movement",
+        ],
       },
       {
         section: "Sector",
@@ -207,15 +207,47 @@ export function Dashboard() {
           ? `Your ${topSector} holdings represent ${sectorPct}% of portfolio`
           : "No sector data",
         action: topSector && Number(sectorPct) > 50 ? "alert" : "warning",
+        tags: topSector
+          ? [topSector, `${sectorPct}% exposure`, "Sector concentration"]
+          : ["Sector data unavailable"],
       },
       {
         section: "Portfolio",
         what: `Largest holding allocation: ${largestAllocation}%`,
         why: `Consider diversifying if a single holding exceeds your target allocation.`,
         action: Number(largestAllocation) > 50 ? "alert" : "success",
+        tags: [
+          topHolding.symbol,
+          `${largestAllocation}% allocation`,
+          "Concentration check",
+        ],
       },
     ];
   }, [holdings, totalValue, topMovers]);
+
+  const weeklyRecap = useMemo(() => {
+    if (!holdings.length) {
+      return {
+        recap: "No portfolio data yet for weekly recap.",
+        action: "Add holdings to unlock weekly action guidance.",
+      };
+    }
+
+    const weightedMove = holdings.reduce(
+      (sum, h) => sum + (h.allocation / 100) * (h.changePercent || 0),
+      0,
+    );
+    const topRisk = [...holdings].sort((a, b) => b.allocation - a.allocation)[0];
+    const action =
+      topRisk && topRisk.allocation >= 35
+        ? `Take action: review concentration in ${topRisk.symbol} (${topRisk.allocation.toFixed(1)}% allocation).`
+        : "No urgent rebalance action. Keep monitoring your top positions.";
+
+    return {
+      recap: `Weekly recap: estimated portfolio move ${weightedMove >= 0 ? "+" : ""}${weightedMove.toFixed(2)}% based on weighted holdings performance.`,
+      action,
+    };
+  }, [holdings]);
 
   const [showSources, setShowSources] = useState(false);
   const [sourcesLoading, setSourcesLoading] = useState(false);
@@ -224,8 +256,7 @@ export function Dashboard() {
   const loadSourcesForBrief = async () => {
     const tickers = Array.from(
       new Set([
-        ...(topMovers || []).map((m: any) => m.symbol),
-        ...(topMarketMovers || []).map((m: any) => m.symbol),
+        ...(holdings || []).map((h: any) => h.symbol),
       ]),
     )
       .filter(Boolean)
@@ -396,26 +427,12 @@ export function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setSelectedAction({ symbol: "PORTFOLIO", type: "success" });
-                setActionWorkflowOpen(true);
-              }}
-            >
-              View Weekly Digest
-            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger>
-                <button
-                  data-slot="button"
-                  className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all h-8 px-3"
-                  type="button"
-                >
+                <Button variant="outline" size="sm">
                   <Settings className="w-4 h-4 mr-2" />
-                  Customize
-                </button>
+                  Custom
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuCheckboxItem
@@ -476,6 +493,10 @@ export function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-blue-900">
+            <div className="rounded-lg border border-blue-200 bg-white p-3">
+              <p className="text-sm font-medium text-gray-900">{weeklyRecap.recap}</p>
+              <p className="mt-1 text-sm text-gray-700">{weeklyRecap.action}</p>
+            </div>
             {portfolioBrief.map((item, i) => (
               <div
                 key={i}
@@ -491,41 +512,15 @@ export function Dashboard() {
                   <p className="text-sm text-gray-600 mb-2">
                     Why it matters: {item.why}
                   </p>
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {item.action === "success" && (
-                      <>
-                        <Badge variant="secondary" className="text-xs">
-                          AAPL
+                  {Array.isArray(item.tags) && item.tags.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {item.tags.map((tag: string, tagIndex: number) => (
+                        <Badge key={`${item.section}-${tagIndex}`} variant="secondary" className="text-xs">
+                          {tag}
                         </Badge>
-                        <Badge variant="secondary" className="text-xs">
-                          MSFT
-                        </Badge>
-                        <Badge variant="secondary" className="text-xs">
-                          Earnings Beat
-                        </Badge>
-                      </>
-                    )}
-                    {item.action === "warning" && (
-                      <>
-                        <Badge variant="secondary" className="text-xs">
-                          XOM
-                        </Badge>
-                        <Badge variant="secondary" className="text-xs">
-                          Energy Sector
-                        </Badge>
-                      </>
-                    )}
-                    {item.action === "alert" && (
-                      <>
-                        <Badge variant="secondary" className="text-xs">
-                          Tech Holdings
-                        </Badge>
-                        <Badge variant="secondary" className="text-xs">
-                          Diversification
-                        </Badge>
-                      </>
-                    )}
-                  </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -735,7 +730,15 @@ export function Dashboard() {
                           <p className="text-sm text-gray-600">One or more theses require review or have been breached</p>
                         </div>
                       </div>
-                      <Link to="/portfolio">
+                      <Link
+                        to={`/thesis${(() => {
+                          const first = (serverTheses || []).find(
+                            (t: any) =>
+                              t && (t.status === "needs-review" || t.status === "breached"),
+                          );
+                          return first?.symbol ? `#${encodeURIComponent(first.symbol)}` : "";
+                        })()}`}
+                      >
                         <Badge variant="outline" className="cursor-pointer bg-white/95 text-gray-900 border-gray-300 hover:bg-gray-100">View Details</Badge>
                       </Link>
                     </div>
@@ -750,14 +753,16 @@ export function Dashboard() {
                           <p className="text-sm text-gray-600">One or more theses have reached their target</p>
                         </div>
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => {
-                        // open action workflow for first achieved thesis symbol if available
-                        const first = (serverTheses || []).find((t: any) => t && t.status === 'achieved');
-                        if (first && first.symbol) {
-                          setSelectedAction({ symbol: first.symbol, type: 'success' });
-                          setActionWorkflowOpen(true);
-                        }
-                      }}>Consider Taking Profit</Button>
+                      <Link
+                        to={`/thesis${(() => {
+                          const first = (serverTheses || []).find(
+                            (t: any) => t && t.status === "achieved",
+                          );
+                          return first?.symbol ? `#${encodeURIComponent(first.symbol)}` : "";
+                        })()}`}
+                      >
+                        <Button variant="outline" size="sm">View in Thesis</Button>
+                      </Link>
                     </div>
                   )}
                 </>
@@ -767,18 +772,6 @@ export function Dashboard() {
         </Card>
       )}
 
-      {/* Action Workflow */}
-      {selectedAction && (
-        <ActionWorkflow
-          open={actionWorkflowOpen}
-          onClose={() => {
-            setActionWorkflowOpen(false);
-            setSelectedAction(null);
-          }}
-          symbol={selectedAction.symbol}
-          actionType={selectedAction.type}
-        />
-      )}
       <SourcesModal
         open={showSources}
         loading={sourcesLoading}

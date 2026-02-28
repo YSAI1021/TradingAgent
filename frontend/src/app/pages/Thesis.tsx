@@ -11,7 +11,6 @@ import {
   Sparkles,
   Plus,
   Edit,
-  ExternalLink,
   Trash,
   Loader2,
 } from "lucide-react";
@@ -44,71 +43,25 @@ import {
   fetchStockPrice,
 } from "@/app/services/api";
 
-const THESIS_SYMBOLS = ["AAPL", "MSFT", "XOM"];
-
-const BASE_THESES = [
-  {
-    symbol: "AAPL",
-    name: "Apple Inc.",
-    thesis:
-      "Strong ecosystem lock-in with recurring revenue from services. AI integration through Apple Intelligence will drive new upgrade cycle. Long-term play on wearables and AR/VR.",
-    entry: 170.5,
-    target: 200.0,
-    stop: 155.0,
-    tags: ["Ecosystem", "AI Integration", "Services Growth"],
-    status: "on-track",
-    lastUpdated: "2026-02-10",
-  },
-  {
-    symbol: "MSFT",
-    name: "Microsoft Corp.",
-    thesis:
-      "Cloud leadership through Azure and enterprise dominance. Copilot AI integration across all products creating moat. GitHub, LinkedIn, and gaming provide diversification.",
-    entry: 380.0,
-    target: 450.0,
-    stop: 350.0,
-    tags: ["Cloud", "Portfolio Copilot", "Enterprise"],
-    status: "on-track",
-    lastUpdated: "2026-02-08",
-  },
-  {
-    symbol: "XOM",
-    name: "Exxon Mobil",
-    thesis:
-      "Energy transition hedge with strong dividend yield. Investments in carbon capture and clean energy while maintaining core oil/gas profitability. Geopolitical tensions support pricing.",
-    entry: 110.0,
-    target: 125.0,
-    stop: 95.0,
-    tags: ["Energy", "Dividends", "Transition"],
-    status: "needs-review",
-    lastUpdated: "2026-02-05",
-  },
-];
+const DEFAULT_THESIS_SYMBOL = "AAPL";
 
 export function Thesis() {
-  const { quotes } = useStockQuotes(THESIS_SYMBOLS);
-  const needsReviewCardRef = useRef<HTMLDivElement>(null);
   const { token, isAuthenticated } = useAuth();
 
   const [serverTheses, setServerTheses] = useState<ThesisRecord[] | null>(null);
-  const [loadingTheses, setLoadingTheses] = useState(false);
-  const [localTheses, setLocalTheses] = useState<ThesisRecord[] | null>(null);
 
   // Load theses from server for authenticated users
   const loadServerTheses = async () => {
     if (!isAuthenticated || !token) {
-      setServerTheses(null);
+      setServerTheses([]);
       return;
     }
-    setLoadingTheses(true);
     try {
       const list = await fetchTheses(token);
       setServerTheses(list || []);
     } catch (err) {
       console.error("Failed to load server theses", err);
       setServerTheses([]);
-    } finally {
-      setLoadingTheses(false);
     }
   };
 
@@ -117,7 +70,7 @@ export function Thesis() {
   const [editing, setEditing] = useState<ThesisRecord | null>(null);
 
   // Form fields
-  const [formSymbol, setFormSymbol] = useState<string>(THESIS_SYMBOLS[0]);
+  const [formSymbol, setFormSymbol] = useState<string>(DEFAULT_THESIS_SYMBOL);
   const [formName, setFormName] = useState<string>("");
   const [formThesis, setFormThesis] = useState<string>("");
   const [formEntry, setFormEntry] = useState<number | undefined>(undefined);
@@ -134,6 +87,19 @@ export function Thesis() {
   const [fetchingPrices, setFetchingPrices] = useState<Record<string, boolean>>({});
   const requestedPricesRef = useRef<Set<string>>(new Set());
   const isMountedRef = useRef<boolean>(true);
+
+  const thesisSymbolsForQuotes = useMemo(() => {
+    const source = Array.isArray(serverTheses) ? serverTheses : [];
+    return Array.from(
+      new Set(
+        [formSymbol, ...source.map((t) => t.symbol)]
+          .map((s) => String(s || "").toUpperCase().trim())
+          .filter(Boolean),
+      ),
+    );
+  }, [formSymbol, serverTheses]);
+
+  const { quotes } = useStockQuotes(thesisSymbolsForQuotes);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -218,25 +184,19 @@ export function Thesis() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, token]);
 
-  const scrollToNeedsReview = () => {
-    needsReviewCardRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-    });
-    needsReviewCardRef.current?.classList.add("highlight-flash");
+  const scrollToStatus = (status: string) => {
+    const target = document.querySelector(
+      `[data-status="${status}"]`,
+    ) as HTMLDivElement | null;
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("highlight-flash");
     setTimeout(() => {
-      needsReviewCardRef.current?.classList.remove("highlight-flash");
+      target.classList.remove("highlight-flash");
     }, 2000);
   };
   const theses = useMemo(() => {
-    let source: any[] = BASE_THESES;
-    if (isAuthenticated) {
-      if (serverTheses && serverTheses.length > 0)
-        source = serverTheses as any[];
-    } else if (localTheses && localTheses.length > 0) {
-      source = localTheses as any[];
-    }
-
+    const source: any[] = Array.isArray(serverTheses) ? (serverTheses as any[]) : [];
     return source.map((t: any) => ({
       ...t,
       lastUpdated: t.lastUpdated || t.last_updated || t.last_updated_at || null,
@@ -247,7 +207,7 @@ export function Thesis() {
           ? quotes[t.symbol].price
           : (fallbackPrices[t.symbol] ?? null),
     }));
-  }, [quotes, serverTheses, isAuthenticated, localTheses]);
+  }, [quotes, serverTheses, fallbackPrices]);
   // Include fallbackPrices so `current` updates when last-close fallbacks arrive
   // (was previously omitted which caused `current` to remain null and progress to be uncomputed)
 
@@ -399,6 +359,29 @@ export function Thesis() {
     });
   }, [theses]);
 
+  const thesisSummary = useMemo(() => {
+    const total = thesesWithStatus.length;
+    const onTrack = thesesWithStatus.filter((t) => t.status === "on-track").length;
+    const achieved = thesesWithStatus.filter((t) => t.status === "achieved").length;
+    const needsReview = thesesWithStatus.filter((t) => t.status === "needs-review").length;
+    const breached = thesesWithStatus.filter((t) => t.status === "breached").length;
+    const healthy = onTrack + achieved;
+    const adherence = total > 0 ? Math.round((healthy / total) * 100) : 0;
+    const needsReviewSymbols = thesesWithStatus
+      .filter((t) => t.status === "needs-review" || t.status === "breached")
+      .map((t) => t.symbol);
+
+    return {
+      total,
+      onTrack,
+      achieved,
+      needsReview,
+      breached,
+      adherence,
+      needsReviewSymbols,
+    };
+  }, [thesesWithStatus]);
+
   // Auto-persist computed thesis status to server when it changes (authenticated users)
   const updatingIdsRef = useRef<Set<number>>(new Set());
   useEffect(() => {
@@ -467,7 +450,7 @@ export function Thesis() {
             onClick={() => {
               // open create dialog
               setEditing(null);
-              setFormSymbol(THESIS_SYMBOLS[0]);
+              setFormSymbol(DEFAULT_THESIS_SYMBOL);
               setFormName("");
               setFormThesis("");
               setFormEntry(undefined);
@@ -489,150 +472,70 @@ export function Thesis() {
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
             Thesis Health Check
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-6 px-2 text-xs"
-            >
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Overall Thesis Assessment */}
-          <div className="p-4 bg-white rounded-lg border border-blue-200">
-            <p className="text-sm text-gray-700 mb-3">
-              <strong>Overall Assessment:</strong> 2 of 3 theses remain on
-              track. XOM requires attention due to recent price underperformance
-              and changing energy sector dynamics.
-            </p>
-            <div className="flex gap-2">
-              <Badge className="bg-green-100 text-green-800 border-0">
-                2 On Track
-              </Badge>
-              <Badge
-                role="button"
-                tabIndex={0}
-                className="bg-yellow-100 text-yellow-800 border border-yellow-200 cursor-pointer hover:bg-yellow-200 transition-colors"
-                onClick={scrollToNeedsReview}
-                onKeyDown={(e) => e.key === "Enter" && scrollToNeedsReview()}
-              >
-                1 Needs Review
-              </Badge>
-            </div>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Badge className="bg-white text-blue-900 border border-blue-200">
+              Total {thesisSummary.total}
+            </Badge>
+            <Badge
+              role="button"
+              tabIndex={0}
+              className="bg-green-100 text-green-800 border border-green-200 cursor-pointer hover:bg-green-200 transition-colors"
+              onClick={() => scrollToStatus("on-track")}
+              onKeyDown={(e) => e.key === "Enter" && scrollToStatus("on-track")}
+            >
+              {thesisSummary.onTrack} On Track
+            </Badge>
+            <Badge
+              role="button"
+              tabIndex={0}
+              className="bg-green-200 text-green-900 border border-green-300 cursor-pointer hover:bg-green-300 transition-colors"
+              onClick={() => scrollToStatus("achieved")}
+              onKeyDown={(e) => e.key === "Enter" && scrollToStatus("achieved")}
+            >
+              {thesisSummary.achieved} Achieved
+            </Badge>
+            <Badge
+              role="button"
+              tabIndex={0}
+              className="bg-yellow-100 text-yellow-800 border border-yellow-200 cursor-pointer hover:bg-yellow-200 transition-colors"
+              onClick={() => scrollToStatus("needs-review")}
+              onKeyDown={(e) => e.key === "Enter" && scrollToStatus("needs-review")}
+            >
+              {thesisSummary.needsReview} Needs Review
+            </Badge>
+            <Badge
+              role="button"
+              tabIndex={0}
+              className="bg-red-100 text-red-800 border border-red-200 cursor-pointer hover:bg-red-200 transition-colors"
+              onClick={() => scrollToStatus("breached")}
+              onKeyDown={(e) => e.key === "Enter" && scrollToStatus("breached")}
+            >
+              {thesisSummary.breached} Breached
+            </Badge>
+            <Badge className="bg-white text-blue-900 border border-blue-200">
+              Adherence {thesisSummary.adherence}%
+            </Badge>
           </div>
 
-          {/* AI Investment Discipline / Rule Adherence */}
-          <div className="p-4 bg-white rounded-lg border border-blue-200">
-            <p className="text-sm font-semibold text-blue-900 mb-3">
-              Rule Adherence Analysis
-            </p>
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-900">
-                    Rule Adherence: 73%
-                  </span>
-                  <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-blue-600 rounded-full"
-                      style={{ width: "73%" }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <Separator />
-
-              <div>
-                <p className="text-sm font-semibold text-gray-900 mb-2">
-                  Compliance by Rule Type
-                </p>
-                <ul className="space-y-2 text-sm text-gray-700">
-                  <li className="flex justify-between">
-                    <span>Stop-loss at -5%</span>
-                    <Badge className="bg-green-100 text-green-800 text-xs border-0">
-                      78%
-                    </Badge>
-                  </li>
-                  <li className="flex justify-between">
-                    <span>No panic selling</span>
-                    <Badge className="bg-yellow-100 text-yellow-800 text-xs border-0">
-                      65%
-                    </Badge>
-                  </li>
-                  <li className="flex justify-between">
-                    <span>Position sizing limits</span>
-                    <Badge className="bg-green-100 text-green-800 text-xs border-0">
-                      88%
-                    </Badge>
-                  </li>
-                </ul>
-              </div>
-
-              <Separator />
-
+          <div className="rounded-lg border border-blue-200 bg-white p-3">
+            <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-gray-200">
               <div
-                className="p-4 rounded-lg"
-                style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.1)",
-                  border: "none",
-                }}
-              >
-                <p className="text-sm font-semibold text-black mb-2">
-                  Violations & Impact
-                </p>
-                <p className="text-sm text-gray-700">
-                  3 times you violated your &quot;no panic selling&quot; rule,
-                  resulting in an average 12% loss recovery missed. On Jan 15,
-                  2026 and Feb 3, 2026, selling during dips led to missing
-                  rebounds.
-                </p>
-              </div>
-
-              <div
-                className="p-4 rounded-lg"
-                style={{
-                  backgroundColor: "rgba(251, 191, 36, 0.1)",
-                  border: "none",
-                }}
-              >
-                <p className="text-sm font-semibold text-black mb-2">
-                  Pattern Recognition
-                </p>
-                <p className="text-sm text-gray-700">
-                  You tend to break rules during high volatility periods. Rule
-                  violations occurred on days when the VIX was above 20 in 4 of
-                  5 cases.
-                </p>
-              </div>
-
-              <div
-                className="p-4 rounded-lg"
-                style={{
-                  backgroundColor: "rgba(16, 185, 129, 0.1)",
-                  border: "none",
-                }}
-              >
-                <p className="text-sm font-semibold text-black mb-2">
-                  Actionable Recommendations
-                </p>
-                <ul className="text-sm text-gray-700 space-y-1">
-                  <li>
-                    • Consider setting automatic alerts for rule violations
-                  </li>
-                  <li>
-                    • Add a &quot;cooling off&quot; period (e.g., 24h) before
-                    selling during high volatility
-                  </li>
-                  <li>
-                    • Review your stop-loss execution — 78% compliance is solid;
-                    focus on panic-selling rule
-                  </li>
-                </ul>
-              </div>
+                className="h-full rounded-full bg-blue-600"
+                style={{ width: `${thesisSummary.adherence}%` }}
+              />
             </div>
+            {thesisSummary.total === 0 ? (
+              <p className="text-xs text-gray-600">
+                No thesis records yet. Add one to start status tracking.
+              </p>
+            ) : (
+              <p className="text-xs text-gray-700">
+                All tracked theses are currently healthy.
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -822,25 +725,7 @@ export function Thesis() {
                         await loadServerTheses();
                       }
                     } else {
-                      // local-only
-                      const next = (localTheses || BASE_THESES.slice()).slice();
-                      if (editing && editing.symbol) {
-                        const idx = next.findIndex(
-                          (x) => x.symbol === editing.symbol,
-                        );
-                        if (idx >= 0)
-                          next[idx] = {
-                            ...next[idx],
-                            ...payload,
-                            lastUpdated: new Date().toISOString(),
-                          };
-                      } else {
-                        next.push({
-                          ...payload,
-                          lastUpdated: new Date().toISOString(),
-                        } as any);
-                      }
-                      setLocalTheses(next as any);
+                      alert("Please sign in to save thesis records.");
                     }
                   } catch (err) {
                     console.error("Failed to save thesis", err);
@@ -856,18 +741,24 @@ export function Thesis() {
         </DialogContent>
       </Dialog>
       <div className="space-y-6">
+        {thesesWithStatus.length === 0 && (
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-gray-600">
+                No theses saved yet. Create your first thesis using "Add New Thesis".
+              </p>
+            </CardContent>
+          </Card>
+        )}
         {thesesWithStatus.map((item) => {
           const progressPct: number | null = item.progressPct ?? null;
           const progressBarPct: number =
             item.progressBarPct != null ? item.progressBarPct : 0;
 
           return (
-            <div
+                <div
                   key={item.symbol}
                   id={item.symbol}
-                  ref={
-                    item.status === "needs-review" ? needsReviewCardRef : undefined
-                  }
                   data-status={item.status}
                 >
               <Card className="border border-gray-200 transition-all duration-300">

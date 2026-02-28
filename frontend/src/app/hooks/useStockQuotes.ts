@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { fetchStockPrice } from "@/app/services/api";
+import { fetchStockPrice, fetchStockChart } from "@/app/services/api";
 import { useAuth } from "@/app/context/AuthContext";
 
 export type StockQuote = {
@@ -22,30 +22,28 @@ async function fetchQuote(
   token?: string,
 ): Promise<StockQuote | null> {
   try {
-    // Try backend API first if token is available
-    if (token) {
-      try {
-        const stockPrice = await fetchStockPrice(symbol, token);
-        console.debug("useStockQuotes: backend response", symbol, stockPrice);
-        const change = stockPrice.price - stockPrice.previousClose;
-        const changePercent = stockPrice.previousClose
-          ? (change / stockPrice.previousClose) * 100
-          : 0;
-        if (!changePercent)
-          console.debug(
-            "useStockQuotes: computed backend changePercent is 0",
-            symbol,
-            {
-              price: stockPrice.price,
-              previousClose: stockPrice.previousClose,
-            },
-          );
-        return { symbol, price: stockPrice.price, change, changePercent };
-      } catch (error) {
+    // Try backend API first (works for both authenticated and guest users)
+    try {
+      const stockPrice = await fetchStockPrice(symbol, token);
+      console.debug("useStockQuotes: backend response", symbol, stockPrice);
+      const change = stockPrice.price - stockPrice.previousClose;
+      const changePercent = stockPrice.previousClose
+        ? (change / stockPrice.previousClose) * 100
+        : 0;
+      if (!changePercent)
         console.debug(
-          `Backend API failed for ${symbol}, falling back to Yahoo Finance`,
+          "useStockQuotes: computed backend changePercent is 0",
+          symbol,
+          {
+            price: stockPrice.price,
+            previousClose: stockPrice.previousClose,
+          },
         );
-      }
+      return { symbol, price: stockPrice.price, change, changePercent };
+    } catch (error) {
+      console.debug(
+        `Backend API failed for ${symbol}, falling back to Yahoo Finance`,
+      );
     }
 
     // Fallback to Yahoo Finance v7 quote endpoint (returns regularMarketPrice and change percent)
@@ -180,30 +178,8 @@ export async function fetchPeriodChangePercent(
   interval = "1d",
 ): Promise<number | null> {
   try {
-    const params = new URLSearchParams({ range, interval });
-    const proxyUrl = `/api/chart/v8/finance/chart/${symbol}?${params}`;
-    let res: Response;
-    try {
-      res = await fetch(proxyUrl);
-      if (!res.ok) throw new Error(`proxy ${res.status}`);
-    } catch (err) {
-      const apiUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?${params}`;
-      const corsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`;
-      res = await fetch(corsUrl);
-      if (!res.ok) return null;
-    }
-
-    const text = await res.text();
-    let json: any;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      return null;
-    }
-    const result = json?.chart?.result?.[0];
-    if (!result) return null;
-    const timestamps: number[] = result.timestamp ?? [];
-    const closes: Array<number | null> = result.indicators?.quote?.[0]?.close ?? [];
+    const chart = await fetchStockChart(symbol, range, interval);
+    const closes: Array<number | null> = (chart.points || []).map((p) => p.close);
     // find first and last non-null close
     const first = closes.find((c: number | null) => c != null) ?? null;
     const last = (() => {

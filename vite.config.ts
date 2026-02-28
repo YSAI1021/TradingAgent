@@ -13,6 +13,22 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+
+          if (id.includes('recharts')) return 'recharts'
+          if (id.includes('@radix-ui')) return 'radix'
+          if (id.includes('react-router')) return 'router'
+          if (id.includes('lucide-react')) return 'icons'
+
+          return 'vendor'
+        },
+      },
+    },
+  },
   plugins: [
     // The React and Tailwind plugins are both required for Make, even if
     // Tailwind is not being actively used – do not remove them

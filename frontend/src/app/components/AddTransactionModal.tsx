@@ -1,6 +1,10 @@
 import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
-import { addPortfolioTransaction, fetchStockPrice, searchStockSymbols } from "@/app/services/api";
+import {
+  addPortfolioTransaction,
+  fetchHistoricalClose,
+  searchStockSymbols,
+} from "@/app/services/api";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +51,7 @@ export function AddTransactionModal({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [fetchingPrice, setFetchingPrice] = useState(false);
+  const [priceHintDate, setPriceHintDate] = useState<string | null>(null);
 
   useEffect(() => {
     if (defaultSymbol) {
@@ -63,7 +68,7 @@ export function AddTransactionModal({
 
     // Auto-fetch price when symbol looks valid
     if (/^[A-Z0-9.\-=/]{1,10}$/.test(upperValue)) {
-      fetchPriceForSymbol(upperValue);
+      fetchPriceForSymbol(upperValue, transactionDate);
     }
   };
 
@@ -91,24 +96,34 @@ export function AddTransactionModal({
     return () => { cancelled = true; clearTimeout(t); };
   }, [symbolQuery]);
 
-  const fetchPriceForSymbol = async (sym: string) => {
+  const fetchPriceForSymbol = async (sym: string, date: string) => {
     if (!sym) return;
 
     setFetchingPrice(true);
     try {
-      const data = await fetchStockPrice(sym, token);
-      if (data.price) {
-        setPricePerShare(data.price.toFixed(2));
-      } else if (data.error) {
-        setError(`Could not fetch price for ${sym}. Please enter manually.`);
+      const data = await fetchHistoricalClose(sym, date, token);
+      if (typeof data?.close === "number") {
+        setPricePerShare(data.close.toFixed(2));
+        setPriceHintDate(data.actualDate || date);
+      } else {
+        setError(`Could not fetch close price for ${sym}. Please enter manually.`);
       }
     } catch (err) {
-      console.error(`Error fetching price for ${sym}:`, err);
-      setError("Could not fetch stock price. Please enter manually.");
+      console.error(`Error fetching close price for ${sym}:`, err);
+      setPriceHintDate(null);
+      setError("Could not fetch close price for selected date. Please enter manually.");
     } finally {
       setFetchingPrice(false);
     }
   };
+
+  useEffect(() => {
+    if (!open) return;
+    if (!symbol || !/^[A-Z0-9.\-=/]{1,10}$/.test(symbol)) return;
+    if (!transactionDate) return;
+    void fetchPriceForSymbol(symbol, transactionDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactionDate]);
 
   const handleSubmit = async () => {
     setError("");
@@ -207,8 +222,9 @@ export function AddTransactionModal({
                           setSymbol(sym);
                           setSymbolQuery(sym);
                           setSymbolSuggestions([]);
-                          fetchPriceForSymbol(sym);
+                          fetchPriceForSymbol(sym, transactionDate);
                         }}
+                        onMouseDown={(e) => e.preventDefault()}
                       >
                         <div className="font-medium">{s.symbol} {s.name ? <span className="text-gray-500">— {s.name}</span> : null}</div>
                         <div className="text-xs text-gray-400">{s.exchange || ''}</div>
@@ -268,6 +284,11 @@ export function AddTransactionModal({
                 </div>
               )}
             </div>
+            {priceHintDate ? (
+              <p className="mt-1 text-xs text-gray-500">
+                Auto-filled with closing price on {priceHintDate}.
+              </p>
+            ) : null}
           </div>
 
           <div>

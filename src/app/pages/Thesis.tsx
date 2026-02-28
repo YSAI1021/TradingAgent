@@ -2,10 +2,11 @@ import { useMemo, useRef } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
-import { Sparkles, Plus, Edit, ExternalLink } from "lucide-react";
+import { Sparkles, Plus, Edit } from "lucide-react";
 import { Link } from "react-router";
 import { Separator } from "@/app/components/ui/separator";
 import { useStockQuotes } from "@/app/hooks/useStockQuotes";
+import { EvidenceChips } from "@/app/components/EvidenceChips";
 
 const THESIS_SYMBOLS = ["AAPL", "MSFT", "XOM"];
 
@@ -64,6 +65,23 @@ export function Thesis() {
       })),
     [quotes]
   );
+  const thesisEvidence = [
+    {
+      source: "Thesis Tracker",
+      evidence: "2 of 3 theses remain within target conditions, while XOM has triggered a review condition.",
+      confidence: "High" as const,
+    },
+    {
+      source: "Rule Adherence",
+      evidence: "Execution discipline drops in high-volatility windows, directly affecting stop-loss and exit consistency.",
+      confidence: "Medium" as const,
+    },
+    {
+      source: "Behavior Pattern",
+      evidence: "Rule violations significantly overlap with higher VIX periods.",
+      confidence: "Medium" as const,
+    },
+  ];
   
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -86,15 +104,9 @@ export function Thesis() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
-            Thesis Health Check
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-6 px-2 text-xs"
-            >
-              <ExternalLink className="w-3 h-3 mr-1" />
-              Sources
-            </Button>
+            AI Brief · Thesis Health Check
+            <Badge variant="outline" className="ml-auto bg-white/80">Gemini + RAG</Badge>
+            <Badge variant="outline" className="bg-white/80">Evidence Mode</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -178,6 +190,8 @@ export function Thesis() {
               </div>
             </div>
           </div>
+          <Separator className="bg-blue-200" />
+          <EvidenceChips items={thesisEvidence} />
         </CardContent>
       </Card>
       
