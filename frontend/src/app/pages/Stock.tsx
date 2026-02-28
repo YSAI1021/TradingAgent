@@ -1,477 +1,392 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
+import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  AlertCircle,
+  ExternalLink,
+  FileText,
+  Loader2,
+  Minus,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 import { useStockQuotes } from "@/app/hooks/useStockQuotes";
-import { TrendingUp, TrendingDown, Minus, Sparkles, AlertCircle, FileText, ExternalLink, Loader2, Building2 } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/app/components/ui/card";
+import { usePortfolio } from "@/app/hooks/usePortfolio";
+import { fetchNews, NewsArticle } from "@/app/services/api";
+import SourcesModal from "@/app/components/SourcesModal";
+import { Button } from "@/app/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Separator } from "@/app/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/tabs";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Button } from "@/app/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/app/components/ui/dialog";
+
+const ENV_API_BASE_URL = ((import.meta.env.VITE_API_URL as string | undefined) || "").trim();
+const IS_LOCAL_BROWSER =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const API_BASE_URL = ENV_API_BASE_URL || (IS_LOCAL_BROWSER ? "http://localhost:3000" : "");
 
 const TIMEFRAMES = [
-  { id: "1D", range: "1d", interval: "5m", label: "1D" },
-  { id: "5D", range: "5d", interval: "15m", label: "5D" },
-  { id: "1M", range: "1mo", interval: "1d", label: "1M" },
-  { id: "6M", range: "6mo", interval: "1d", label: "6M" },
-  { id: "YTD", range: "ytd", interval: "1d", label: "YTD" },
-  { id: "1Y", range: "1y", interval: "1d", label: "1Y" },
-  { id: "5Y", range: "5y", interval: "1wk", label: "5Y" },
-  { id: "Max", range: "max", interval: "1mo", label: "Max" },
+  { id: "1D", range: "1d", interval: "5m" },
+  { id: "5D", range: "5d", interval: "15m" },
+  { id: "1M", range: "1mo", interval: "1d" },
+  { id: "6M", range: "6mo", interval: "1d" },
+  { id: "YTD", range: "ytd", interval: "1d" },
+  { id: "1Y", range: "1y", interval: "1d" },
+  { id: "5Y", range: "5y", interval: "1wk" },
+  { id: "MAX", range: "max", interval: "1mo" },
 ] as const;
 
 type ChartDataPoint = {
   timestamp: number;
-  date: string;
-  time: string;
+  label: string;
   close: number;
-  change: number;
-  changePercent: number;
 };
 
-function formatChartDate(timestamp: number, range: string): string {
-  const d = new Date(timestamp * 1000);
+const STOCK_META: Record<string, { name: string; sector: string }> = {
+  AAPL: { name: "Apple Inc.", sector: "Technology" },
+  MSFT: { name: "Microsoft Corp.", sector: "Technology" },
+  GOOGL: { name: "Alphabet Inc.", sector: "Technology" },
+  NVDA: { name: "NVIDIA Corp.", sector: "Technology" },
+  META: { name: "Meta Platforms", sector: "Technology" },
+  TSLA: { name: "Tesla Inc.", sector: "Auto" },
+  AMZN: { name: "Amazon.com", sector: "Consumer Discretionary" },
+  JPM: { name: "JPMorgan Chase", sector: "Finance" },
+  XOM: { name: "Exxon Mobil", sector: "Energy" },
+  UNH: { name: "UnitedHealth Group", sector: "Healthcare" },
+};
+
+const FUNDAMENTALS: Record<
+  string,
+  { marketCap: string; peRatio: string; epsTtm: string; dividendYield: string }
+> = {
+  AAPL: { marketCap: "$2.9T", peRatio: "30.2", epsTtm: "$6.43", dividendYield: "0.52%" },
+  MSFT: { marketCap: "$3.2T", peRatio: "36.7", epsTtm: "$12.44", dividendYield: "0.68%" },
+  GOOGL: { marketCap: "$2.1T", peRatio: "27.5", epsTtm: "$6.92", dividendYield: "0.00%" },
+  NVDA: { marketCap: "$2.8T", peRatio: "61.0", epsTtm: "$2.31", dividendYield: "0.03%" },
+  XOM: { marketCap: "$490B", peRatio: "14.7", epsTtm: "$7.96", dividendYield: "3.35%" },
+  UNH: { marketCap: "$470B", peRatio: "24.1", epsTtm: "$24.35", dividendYield: "1.42%" },
+};
+
+const COMPANY_OVERVIEW: Record<string, string> = {
+  AAPL:
+    "Apple remains a premium consumer technology platform with durable pricing power and recurring services revenue. The current thesis centers on ecosystem retention, services expansion, and AI-driven device upgrade cycles.",
+  MSFT:
+    "Microsoft is positioned as a scaled enterprise software and cloud platform. The primary thesis is sustained Azure growth plus monetization of AI copilots across productivity and developer workflows.",
+  GOOGL:
+    "Alphabet combines search monetization, cloud growth, and AI model deployment at global scale. The core debate is balancing ad resilience with regulatory pressure and AI capex intensity.",
+  NVDA:
+    "NVIDIA is the dominant compute platform in AI acceleration. The thesis is anchored in demand durability for data-center AI infrastructure and software ecosystem lock-in.",
+  XOM:
+    "Exxon provides cash flow resilience in commodity cycles with disciplined capital returns. The thesis focuses on free-cash-flow consistency and downside hedge properties in diversified portfolios.",
+  UNH:
+    "UnitedHealth combines managed care scale with healthcare-services execution. The thesis emphasizes earnings stability and defensive characteristics during macro uncertainty.",
+};
+
+function formatXAxisLabel(timestamp: number, range: string): string {
+  const date = new Date(timestamp * 1000);
   if (range === "1d" || range === "5d") {
-    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   }
   if (range === "5y" || range === "max") {
-    return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+    return date.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
   }
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
-
-function formatTooltipDate(timestamp: number, range: string): string {
-  const d = new Date(timestamp * 1000);
-  if (range === "1d" || range === "5d") {
-    return d.toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  }
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-const YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 
 async function fetchChartData(
   symbol: string,
   range: string,
-  interval: string
+  interval: string,
 ): Promise<ChartDataPoint[]> {
   const params = new URLSearchParams({ range, interval });
-  const apiUrl = `${YAHOO_CHART_BASE}/${symbol}?${params}`;
-
-  // 1. Try Vite dev proxy (works when running npm run dev)
-  const proxyUrl = `/api/chart/v8/finance/chart/${symbol}?${params}`;
-  let res: Response;
-  let usedProxy = true;
-
-  try {
-    res = await fetch(proxyUrl);
-    if (!res.ok) {
-      console.warn("[Chart] Proxy request failed:", res.status, res.statusText);
-      throw new Error(`Proxy: ${res.status} ${res.statusText}`);
-    }
-  } catch (proxyErr) {
-    console.warn("[Chart] Proxy fetch failed, trying CORS fallback:", proxyErr);
-    usedProxy = false;
-    // 2. Fallback: CORS proxy (works when proxy unavailable, e.g. production build)
-    const corsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`;
-    res = await fetch(corsUrl);
+  const response = await fetch(`${API_BASE_URL}/api/stock/chart/${symbol}?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error("Failed to load chart data");
   }
+  const json = await response.json();
+  const result = json?.chart?.result?.[0];
+  if (!result) throw new Error("No chart data available");
+  const timestamps = result.timestamp || [];
+  const closes = result.indicators?.quote?.[0]?.close || [];
 
-  const rawText = await res.text();
-  console.log("[Chart] Response status:", res.status, "Used proxy:", usedProxy);
-
-  let json: unknown;
-  try {
-    json = JSON.parse(rawText);
-  } catch {
-    console.error("[Chart] Invalid JSON response:", rawText.slice(0, 500));
-    throw new Error(`Invalid JSON (status ${res.status})`);
-  }
-
-  const result = (json as { chart?: { result?: unknown[] } })?.chart?.result?.[0];
-  if (!result) {
-    console.error("[Chart] Unexpected data shape:", JSON.stringify(json).slice(0, 800));
-    throw new Error("Invalid chart data structure");
-  }
-
-  const timestamps = (result as { timestamp?: number[] }).timestamp ?? [];
-  const quotes = (result as { indicators?: { quote?: { close?: (number | null)[] }[] } }).indicators?.quote?.[0];
-  const closes = quotes?.close ?? [];
-  const previousClose = (result as { meta?: { previousClose?: number } }).meta?.previousClose ?? closes[0];
-
-  const data: ChartDataPoint[] = [];
-  for (let i = 0; i < timestamps.length; i++) {
-    const close = closes[i];
-    if (close == null) continue;
-    const change = close - previousClose;
-    const changePercent = previousClose ? (change / previousClose) * 100 : 0;
-    data.push({
-      timestamp: timestamps[i],
-      date: formatChartDate(timestamps[i], range),
-      time: formatTooltipDate(timestamps[i], range),
-      close,
-      change,
-      changePercent,
-    });
-  }
-
-  if (data.length === 0) {
-    console.warn("[Chart] No data points parsed. timestamps:", timestamps.length, "closes:", closes.length);
-    throw new Error("No chart data points");
-  }
-
-  return data;
+  return timestamps
+    .map((timestamp: number, index: number) => {
+      const close = closes[index];
+      if (close == null) return null;
+      return {
+        timestamp,
+        close,
+        label: formatXAxisLabel(timestamp, range),
+      };
+    })
+    .filter(Boolean) as ChartDataPoint[];
 }
 
-function ChartTooltip({
-  active,
-  payload,
-  label,
-  range,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: ChartDataPoint }>;
-  label?: string;
-  range: string;
-}) {
-  if (!active || !payload?.length) return null;
-  const p = payload[0].payload;
-  const isPositive = p.change >= 0;
-  return (
-    <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-lg">
-      <p className="text-xs text-gray-500 mb-1">{p.time}</p>
-      <p className="text-lg font-semibold text-gray-900">
-        ${p.close.toFixed(2)}
-      </p>
-      <p
-        className={`text-sm font-medium ${isPositive ? "text-green-600" : "text-red-600"}`}
-      >
-        {isPositive ? "+" : ""}
-        {p.change.toFixed(2)} ({isPositive ? "+" : ""}
-        {p.changePercent.toFixed(2)}%)
-      </p>
-    </div>
-  );
+function buildThemes(news: NewsArticle[]) {
+  const themeBuckets: Record<string, { bullish: number; bearish: number; neutral: number }> = {};
+  const keywords = [
+    { key: "Earnings & Guidance", match: /(earnings|guidance|revenue|quarter|q[1-4])/i },
+    { key: "AI & Product Momentum", match: /(ai|cloud|chip|product|launch|model)/i },
+    { key: "Regulation & Policy", match: /(regulat|antitrust|policy|lawsuit|investigation)/i },
+    { key: "Supply Chain & Operations", match: /(supply|factory|shipment|production|inventory)/i },
+  ];
+
+  news.forEach((article) => {
+    const matchedTheme =
+      keywords.find((keyword) => keyword.match.test(article.title || ""))?.key || "Market Commentary";
+    if (!themeBuckets[matchedTheme]) {
+      themeBuckets[matchedTheme] = { bullish: 0, bearish: 0, neutral: 0 };
+    }
+    const sentiment = (article.sentiment || "neutral").toLowerCase();
+    if (sentiment.includes("bull")) themeBuckets[matchedTheme].bullish += 1;
+    else if (sentiment.includes("bear")) themeBuckets[matchedTheme].bearish += 1;
+    else themeBuckets[matchedTheme].neutral += 1;
+  });
+
+  return Object.entries(themeBuckets)
+    .map(([theme, counts]) => {
+      const total = counts.bullish + counts.bearish + counts.neutral;
+      const net = counts.bullish - counts.bearish;
+      const sentiment = net > 0 ? "Positive" : net < 0 ? "Negative" : "Neutral";
+      return { theme, sentiment, total };
+    })
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 4);
 }
 
 export function Stock() {
-  const { symbol = "AAPL" } = useParams();
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(TIMEFRAMES[2]); // 1M default
+  const { symbol: rawSymbol = "AAPL" } = useParams();
+  const symbol = rawSymbol.toUpperCase();
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(TIMEFRAMES[2]);
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadChartData = () => {
-    setLoading(true);
-    setError(null);
-    const range = timeframe.range;
-    const interval = timeframe.interval;
-    console.log("[Chart] Fetching", symbol, timeframe.id, "→", range, interval);
-    fetchChartData(symbol, range, interval)
-      .then((data) => {
-        setChartData(data);
-        console.log("[Chart] Loaded", data.length, "data points");
-      })
-      .catch((e) => {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        console.error("[Chart] Fetch error:", e);
-      })
-      .finally(() => setLoading(false));
-  };
+  const [loadingChart, setLoadingChart] = useState(true);
+  const [chartError, setChartError] = useState("");
+  const [newsBySymbol, setNewsBySymbol] = useState<Record<string, NewsArticle[]>>({});
+  const [loadingNews, setLoadingNews] = useState(true);
+  const [showSources, setShowSources] = useState(false);
 
   const { quotes } = useStockQuotes([symbol]);
-  const stockMeta: Record<string, { name: string; sector: string }> = {
-    AAPL: { name: "Apple Inc.", sector: "Technology" },
-    MSFT: { name: "Microsoft Corp.", sector: "Technology" },
-    GOOGL: { name: "Alphabet Inc.", sector: "Technology" },
-    XOM: { name: "Exxon Mobil", sector: "Energy" },
-    JPM: { name: "JPMorgan Chase", sector: "Finance" },
-    NVDA: { name: "NVIDIA Corp.", sector: "Technology" },
-    TSLA: { name: "Tesla Inc.", sector: "Auto" },
-    META: { name: "Meta Platforms", sector: "Technology" },
-    DIS: { name: "Walt Disney", sector: "Media" },
-  };
-  const meta = stockMeta[symbol as keyof typeof stockMeta] ?? { name: symbol, sector: "—" };
-  const quote = quotes[symbol];
-  const fallbackPrice: Record<string, number> = { AAPL: 228.52, MSFT: 415.5, GOOGL: 173.28, XOM: 118.45, JPM: 198.3, NVDA: 141.2, TSLA: 263.45, META: 585.3, DIS: 118.9 };
-  const lastChartPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : null;
-  // Percentage change based on selected timeframe: (current - start) / start * 100
+  const { holdings, totalValue } = usePortfolio();
+  const meta = STOCK_META[symbol] || { name: symbol, sector: "Other" };
+  const price = quotes[symbol]?.price ?? chartData[chartData.length - 1]?.close ?? 0;
+
   const periodChangePercent =
     chartData.length >= 2
       ? ((chartData[chartData.length - 1].close - chartData[0].close) / chartData[0].close) * 100
-      : quote?.changePercent ?? 0;
-  const stock = {
-    ...meta,
-    price: quote?.price ?? lastChartPrice ?? fallbackPrice[symbol] ?? 0,
-    change: periodChangePercent,
-  };
+      : quotes[symbol]?.changePercent ?? 0;
 
   useEffect(() => {
-    loadChartData();
-  }, [symbol, timeframe.id]);
+    setLoadingChart(true);
+    setChartError("");
+    fetchChartData(symbol, timeframe.range, timeframe.interval)
+      .then((data) => setChartData(data))
+      .catch((error: unknown) => {
+        setChartError(error instanceof Error ? error.message : "Failed to load chart");
+      })
+      .finally(() => setLoadingChart(false));
+  }, [symbol, timeframe]);
+
+  const holdingSymbols = useMemo(
+    () => Array.from(new Set(holdings.map((holding) => holding.symbol).filter(Boolean))).slice(0, 8),
+    [holdings],
+  );
+  const newsUniverseSymbols = useMemo(
+    () => (holdingSymbols.length > 0 ? holdingSymbols : [symbol]),
+    [holdingSymbols, symbol],
+  );
+  const newsUniverseKey = useMemo(() => newsUniverseSymbols.join(","), [newsUniverseSymbols]);
+
+  useEffect(() => {
+    let mounted = true;
+    const symbolsToQuery = newsUniverseKey ? newsUniverseKey.split(",").filter(Boolean) : [];
+    if (symbolsToQuery.length === 0) {
+      setNewsBySymbol({});
+      setLoadingNews(false);
+      return;
+    }
+
+    setLoadingNews(true);
+    Promise.all(
+      symbolsToQuery.map(async (ticker) => {
+        try {
+          const items = await fetchNews(ticker);
+          return [ticker, Array.isArray(items) ? items : []] as const;
+        } catch (error) {
+          console.error("Failed to load stock news for", ticker, error);
+          return [ticker, []] as const;
+        }
+      }),
+    )
+      .then((rows) => {
+        if (!mounted) return;
+        setNewsBySymbol(Object.fromEntries(rows));
+      })
+      .finally(() => {
+        if (mounted) setLoadingNews(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [newsUniverseKey]);
 
   const lineColor =
-    chartData.length >= 2
-      ? chartData[chartData.length - 1].close >= chartData[0].close
-        ? "#22c55e"
-        : "#ef4444"
-      : "#6b7280";
+    chartData.length >= 2 && chartData[chartData.length - 1].close >= chartData[0].close
+      ? "#16a34a"
+      : "#dc2626";
 
-  const [companyOverviewOpen, setCompanyOverviewOpen] = useState(false);
-  const companyOverviews: Record<string, { business: string; industry: string; products: string; marketPosition: string; recentDevelopments: string }> = {
-    AAPL: {
-      business: "Apple designs, manufactures, and sells consumer electronics, software, and services. The company's product lineup includes the iPhone, Mac, iPad, Apple Watch, and services like the App Store, Apple Music, and iCloud.",
-      industry: "Technology / Consumer Electronics",
-      products: "iPhone, Mac, iPad, Apple Watch, AirPods, Apple TV, Services (App Store, Apple Music, iCloud)",
-      marketPosition: "World's largest company by market cap. Dominant in premium smartphone segment with strong ecosystem lock-in.",
-      recentDevelopments: "Apple Intelligence AI integration across devices. Growing services revenue. Expansion in India and emerging markets.",
-    },
-    MSFT: {
-      business: "Microsoft develops and licenses software, cloud services, and hardware. Core products include Windows, Office 365, Azure cloud, Xbox, and LinkedIn.",
-      industry: "Technology / Software & Cloud",
-      products: "Windows, Office 365, Azure, Teams, Dynamics 365, Xbox, GitHub, LinkedIn",
-      marketPosition: "Leading cloud provider (Azure). Dominant in enterprise software and productivity tools.",
-      recentDevelopments: "Copilot AI across product suite. Strong Azure growth. Gaming and Activision acquisition.",
-    },
-    GOOGL: {
-      business: "Alphabet (Google) operates search, advertising, cloud, and consumer products. Core revenue comes from digital advertising and cloud services.",
-      industry: "Technology / Internet & Advertising",
-      products: "Google Search, YouTube, Google Cloud, Android, Chrome, Pixel devices",
-      marketPosition: "Dominant in search and digital advertising. Major cloud player. Leading in AI research.",
-      recentDevelopments: "Gemini AI integration. Cloud growth. Ongoing antitrust scrutiny.",
-    },
-    XOM: {
-      business: "Exxon Mobil explores, produces, and refines oil and gas. Operates across upstream, downstream, and chemical segments globally.",
-      industry: "Energy / Oil & Gas",
-      products: "Crude oil, natural gas, refined fuels, lubricants, petrochemicals",
-      marketPosition: "One of the largest integrated oil companies. Strong dividend history.",
-      recentDevelopments: "Carbon capture investments. Guyana and Permian production growth.",
-    },
-    JPM: {
-      business: "JPMorgan Chase provides banking, asset management, and investment services. Operates consumer, commercial, and investment banking.",
-      industry: "Finance / Banking",
-      products: "Consumer banking, credit cards, mortgages, investment banking, asset management",
-      marketPosition: "Largest U.S. bank by assets. Leader in investment banking and trading.",
-      recentDevelopments: "Strong net interest income. Wealth management growth. Fed stress test performance.",
-    },
-    NVDA: {
-      business: "NVIDIA designs GPUs for gaming, data centers, and AI. Dominant in AI training chips and accelerated computing.",
-      industry: "Technology / Semiconductors",
-      products: "GeForce GPUs, Data Center GPUs (A100, H100), AI software, Omniverse",
-      marketPosition: "Market leader in AI chips. Near-monopoly in data center AI accelerators.",
-      recentDevelopments: "Record data center revenue. Blackwell chip ramp. AI infrastructure demand.",
-    },
-    TSLA: {
-      business: "Tesla designs and manufactures electric vehicles, energy storage, and solar products. Also developing FSD and robotics.",
-      industry: "Auto / Electric Vehicles",
-      products: "Model S, 3, X, Y, Cybertruck, Megapack, Powerwall, Solar",
-      marketPosition: "Largest EV maker by volume. Leader in battery tech and charging network.",
-      recentDevelopments: "FSD rollout. Cybertruck production. Robotaxi ambitions.",
-    },
-    META: {
-      business: "Meta Platforms operates social and communication apps including Facebook, Instagram, WhatsApp, and Reality Labs for VR/AR.",
-      industry: "Technology / Social Media & Advertising",
-      products: "Facebook, Instagram, WhatsApp, Messenger, Quest VR, Ray-Ban Meta",
-      marketPosition: "Largest social media company. Leader in digital advertising reach.",
-      recentDevelopments: "AI assistant rollout. Metaverse investments. Strong ad revenue recovery.",
-    },
-    DIS: {
-      business: "Walt Disney operates media networks, theme parks, and streaming (Disney+, Hulu, ESPN+). Creates films, TV, and entertainment content.",
-      industry: "Media / Entertainment",
-      products: "Disney+, Hulu, ESPN+, Theme parks, studios, linear TV networks",
-      marketPosition: "Leading entertainment conglomerate. Major streaming subscriber base.",
-      recentDevelopments: "Streaming profitability focus. ESPN strategic options. Box office recovery.",
-    },
-  };
-  const companyOverview = companyOverviews[symbol] ?? {
-    business: `${meta.name} operates in the ${meta.sector} sector. Further details can be found in company filings and investor relations.`,
-    industry: meta.sector,
-    products: "Key products and services available in company reports.",
-    marketPosition: "Market position varies by segment and geography.",
-    recentDevelopments: "Check latest earnings and news for recent developments.",
-  };
+  const companyOverview =
+    COMPANY_OVERVIEW[symbol] ||
+    `${meta.name} operates in the ${meta.sector} sector. This summary should be validated against the latest filings and earnings updates.`;
 
-  const newsThemes = [
-    { theme: "Strong Q4 Earnings", sentiment: "Positive", articles: 12 },
-    { theme: "AI Integration", sentiment: "Positive", articles: 8 },
-    { theme: "Supply Chain Concerns", sentiment: "Neutral", articles: 5 },
-  ];
+  const fundamentals =
+    FUNDAMENTALS[symbol] || {
+      marketCap: "—",
+      peRatio: "—",
+      epsTtm: "—",
+      dividendYield: "—",
+    };
 
-  const impactOnPortfolio = [
-    { metric: "Direct Exposure", value: "35% of portfolio" },
-    { metric: "Sector Exposure", value: "65% in Tech" },
-    { metric: "Correlation Risk", value: "High with MSFT, GOOGL" },
-  ];
+  const holdingNews = useMemo(
+    () =>
+      Object.entries(newsBySymbol)
+        .flatMap(([ticker, items]) =>
+          items.map((item) => ({
+            ...item,
+            stock_ticker: item.stock_ticker || ticker,
+          })),
+        )
+        .sort((a, b) => {
+          const aDate = a.news_published_at ? new Date(a.news_published_at).getTime() : 0;
+          const bDate = b.news_published_at ? new Date(b.news_published_at).getTime() : 0;
+          return bDate - aDate;
+        }),
+    [newsBySymbol],
+  );
+  const themes = useMemo(() => buildThemes(holdingNews), [holdingNews]);
+
+  const directHolding = holdings.find((holding) => holding.symbol === symbol);
+  const directExposurePct = directHolding && totalValue > 0 ? (directHolding.value / totalValue) * 100 : 0;
+  const sectorExposurePct =
+    totalValue > 0
+      ? (holdings
+          .filter((holding) => holding.sector === meta.sector)
+          .reduce((sum, holding) => sum + holding.value, 0) /
+          totalValue) *
+        100
+      : 0;
+  const correlatedNames = holdings
+    .filter((holding) => holding.symbol !== symbol && holding.sector === meta.sector)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 2)
+    .map((holding) => holding.symbol);
+  const correlationRisk =
+    sectorExposurePct >= 55 ? "High" : sectorExposurePct >= 35 ? "Medium" : "Low";
+
+  const newsSummary = (() => {
+    if (loadingNews) return "Loading news themes for your holdings...";
+    if (holdingNews.length === 0) return "No recent indexed news. Sync news to refresh themes.";
+    const positiveCount = holdingNews.filter((item) =>
+      (item.sentiment || "").toLowerCase().includes("bull"),
+    ).length;
+    const negativeCount = holdingNews.filter((item) =>
+      (item.sentiment || "").toLowerCase().includes("bear"),
+    ).length;
+    if (positiveCount > negativeCount) {
+      return "Recent coverage skews positive with earnings and product momentum as primary drivers.";
+    }
+    if (negativeCount > positiveCount) {
+      return "Recent coverage skews cautious, with downside narratives outweighing positive catalysts.";
+    }
+    return "Coverage is mixed. Monitor incoming catalysts before making sizing changes.";
+  })();
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center gap-3 mb-2">
-          <h1 className="text-3xl font-semibold text-gray-900">{symbol}</h1>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCompanyOverviewOpen(true)}
-            className="ml-2"
-          >
-            <Building2 className="w-4 h-4 mr-2" />
-            Company Overview
-          </Button>
-        </div>
-        <p className="text-gray-500">{stock.name}</p>
-        <div className="flex items-center gap-4 mt-3">
-          <span className="text-2xl font-semibold text-gray-900">${(stock.price ?? 0).toFixed(2)}</span>
+    <div className="p-8 max-w-7xl mx-auto space-y-6">
+      <div className="mb-2">
+        <h1 className="text-3xl font-semibold text-gray-900">{symbol}</h1>
+        <p className="text-gray-500 mt-1">{meta.name}</p>
+        <div className="mt-3 flex items-center gap-4">
+          <span className="text-2xl font-semibold text-gray-900">${price.toFixed(2)}</span>
           <span
             className={`flex items-center gap-1 text-lg ${
-              (stock.change ?? 0) > 0 ? "text-green-600" : (stock.change ?? 0) < 0 ? "text-red-600" : "text-gray-500"
+              periodChangePercent > 0
+                ? "text-green-600"
+                : periodChangePercent < 0
+                  ? "text-red-600"
+                  : "text-gray-500"
             }`}
           >
-            {(stock.change ?? 0) > 0 ? <TrendingUp className="w-5 h-5" /> : (stock.change ?? 0) < 0 ? <TrendingDown className="w-5 h-5" /> : <Minus className="w-5 h-5" />}
-            {(stock.change ?? 0) > 0 ? "+" : ""}
-            {(stock.change ?? 0).toFixed(2)}%
+            {periodChangePercent > 0 ? (
+              <TrendingUp className="w-5 h-5" />
+            ) : periodChangePercent < 0 ? (
+              <TrendingDown className="w-5 h-5" />
+            ) : (
+              <Minus className="w-5 h-5" />
+            )}
+            {periodChangePercent > 0 ? "+" : ""}
+            {periodChangePercent.toFixed(2)}%
           </span>
         </div>
       </div>
 
-      {/* Company Overview Modal */}
-      <Dialog open={companyOverviewOpen} onOpenChange={setCompanyOverviewOpen}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Building2 className="w-5 h-5" />
-              {symbol} — Company Overview
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 text-sm">
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">What the Company Does</h4>
-              <p className="text-gray-700">{companyOverview.business}</p>
-            </div>
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Industry & Sector</h4>
-              <p className="text-gray-700">{companyOverview.industry}</p>
-            </div>
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Key Products & Services</h4>
-              <p className="text-gray-700">{companyOverview.products}</p>
-            </div>
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Market Position</h4>
-              <p className="text-gray-700">{companyOverview.marketPosition}</p>
-            </div>
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Recent Developments</h4>
-              <p className="text-gray-700">{companyOverview.recentDevelopments}</p>
-            </div>
-            <div className="pt-4 border-t">
-              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-gray-500">
-                <ExternalLink className="w-3 h-3 mr-1" />
-                AI-generated summary · Sources
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Price Chart - Google Finance style */}
-      <Card className="mb-6">
+      <Card>
         <CardContent className="pt-6">
-          {/* Timeframe selector */}
           <div className="flex flex-wrap gap-1 mb-4">
-            {TIMEFRAMES.map((tf) => (
+            {TIMEFRAMES.map((item) => (
               <Button
-                key={tf.id}
-                variant={timeframe.id === tf.id ? "default" : "ghost"}
+                key={item.id}
+                variant={timeframe.id === item.id ? "default" : "ghost"}
                 size="sm"
-                className={`h-8 px-3 text-xs font-medium ${
-                  timeframe.id === tf.id
+                className={
+                  timeframe.id === item.id
                     ? "bg-white text-gray-900 border border-gray-300 hover:bg-gray-50"
-                    : "text-gray-600 hover:text-gray-900 hover:bg-gray-100 border border-transparent"
-                }`}
-                onClick={() => setTimeframe(tf)}
+                    : "text-gray-600 hover:bg-gray-100"
+                }
+                onClick={() => setTimeframe(item)}
               >
-                {tf.label}
+                {item.id}
               </Button>
             ))}
           </div>
-
-          {/* Chart */}
-          <div className="h-[400px] w-full">
-            {loading ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-500">
-                <Loader2 className="h-8 w-8 animate-spin" />
-                <span>Loading chart...</span>
+          <div className="h-[360px] w-full">
+            {loadingChart ? (
+              <div className="h-full flex items-center justify-center text-gray-500">
+                <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                Loading chart...
               </div>
-            ) : error ? (
-              <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                <p className="text-red-600 font-medium">{error}</p>
-                <p className="text-xs text-gray-500 max-w-md">
-                  API: query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=
-                  {timeframe.range}&interval={timeframe.interval}
-                </p>
-                <Button variant="outline" size="sm" onClick={loadChartData}>
+            ) : chartError ? (
+              <div className="h-full flex flex-col items-center justify-center text-center">
+                <p className="text-red-600 text-sm">{chartError}</p>
+                <Button variant="outline" size="sm" className="mt-3" onClick={() => setTimeframe({ ...timeframe })}>
                   Retry
                 </Button>
               </div>
-            ) : chartData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-gray-500">
-                No data available
-              </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={chartData}
-                  margin={{ top: 8, right: 8, left: 8, bottom: 8 }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#f0f0f0"
-                    vertical={false}
-                  />
+                <LineChart data={chartData}>
                   <XAxis
-                    dataKey="date"
+                    dataKey="label"
                     tick={{ fontSize: 11, fill: "#6b7280" }}
                     axisLine={false}
                     tickLine={false}
                     interval={Math.max(0, Math.floor((chartData.length - 1) / 4))}
-                    tickFormatter={(value, index) => (index === 0 ? "" : value)}
                   />
                   <YAxis
-                    domain={["auto", "auto"]}
                     tick={{ fontSize: 11, fill: "#6b7280" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(v) => String(Math.round(v))}
-                    tickCount={4}
-                    allowDecimals={false}
-                    width={40}
+                    domain={["auto", "auto"]}
+                    width={48}
                   />
                   <Tooltip
-                    content={<ChartTooltip range={timeframe.range} />}
-                    cursor={{ stroke: "#d1d5db", strokeDasharray: "4 4" }}
+                    contentStyle={{
+                      borderRadius: 8,
+                      border: "1px solid #e5e7eb",
+                    }}
                   />
-                  <Line
-                    type="monotone"
-                    dataKey="close"
-                    stroke={lineColor}
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4, fill: lineColor, strokeWidth: 0 }}
-                    isAnimationActive={true}
-                  />
+                  <Line type="monotone" dataKey="close" stroke={lineColor} strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             )}
@@ -479,142 +394,133 @@ export function Stock() {
         </CardContent>
       </Card>
 
-      {/* AI News Themes */}
-      <Card className="mb-6 border-blue-200 bg-blue-50">
+      <Card>
+        <CardHeader>
+          <CardTitle>Company Overview</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-gray-700 leading-relaxed">{companyOverview}</p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Data Snapshot</CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4">
+          <div className="p-4 rounded-lg bg-gray-50">
+            <p className="text-xs text-gray-500 mb-1">Market Cap</p>
+            <p className="text-lg font-semibold text-gray-900">{fundamentals.marketCap}</p>
+          </div>
+          <div className="p-4 rounded-lg bg-gray-50">
+            <p className="text-xs text-gray-500 mb-1">P/E Ratio</p>
+            <p className="text-lg font-semibold text-gray-900">{fundamentals.peRatio}</p>
+          </div>
+          <div className="p-4 rounded-lg bg-gray-50">
+            <p className="text-xs text-gray-500 mb-1">EPS (TTM)</p>
+            <p className="text-lg font-semibold text-gray-900">{fundamentals.epsTtm}</p>
+          </div>
+          <div className="p-4 rounded-lg bg-gray-50">
+            <p className="text-xs text-gray-500 mb-1">Dividend Yield</p>
+            <p className="text-lg font-semibold text-gray-900">{fundamentals.dividendYield}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-blue-900">
             <Sparkles className="w-5 h-5" />
             AI News Themes & Sentiment
-            <Button variant="ghost" size="sm" className="ml-auto h-6 px-2 text-xs">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto h-6 px-2 text-xs"
+              onClick={() => setShowSources(true)}
+            >
               <ExternalLink className="w-3 h-3 mr-1" />
               Sources
             </Button>
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {newsThemes.map((item, i) => (
-              <div
-                key={i}
-                className="p-3 bg-white rounded-lg border border-blue-500/20"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-medium text-gray-900">{item.theme}</span>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-blue-800/80">
+            Tailored to your current holdings: {newsUniverseSymbols.join(", ")}
+          </p>
+          {themes.length === 0 ? (
+            <div className="p-3 bg-white rounded-lg border border-blue-500/20 text-sm text-gray-600">
+              <FileText className="w-4 h-4 inline-block mr-2" />
+              No theme data yet. Sync or ingest news to populate this section.
+            </div>
+          ) : (
+            themes.map((theme) => (
+              <div key={theme.theme} className="p-3 bg-white rounded-lg border border-blue-500/20">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium text-gray-900">{theme.theme}</p>
                   <Badge
-                    variant={item.sentiment === "Positive" ? "default" : "secondary"}
                     className={
-                      item.sentiment === "Positive" ? "bg-green-100 text-green-800 border-0" : ""
+                      theme.sentiment === "Positive"
+                        ? "bg-green-100 text-green-800 border-0"
+                        : theme.sentiment === "Negative"
+                          ? "bg-red-100 text-red-800 border-0"
+                          : "bg-gray-100 text-gray-700 border-0"
                     }
                   >
-                    {item.sentiment}
+                    {theme.sentiment}
                   </Badge>
                 </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <FileText className="w-4 h-4" />
-                  <span>{item.articles} articles analyzed</span>
-                </div>
+                <p className="text-sm text-gray-600 mt-1">{theme.total} articles analyzed</p>
               </div>
-            ))}
-            <Separator className="bg-blue-200" />
-            <div className="p-4 bg-white rounded-lg border border-blue-500/20">
-              <p className="text-sm text-gray-700">
-                <strong>Overall Sentiment Trend:</strong> Positive momentum driven
-                by strong earnings and AI product announcements. Watch for supply
-                chain updates in coming weeks.
-              </p>
-            </div>
+            ))
+          )}
+          <Separator className="bg-blue-200" />
+          <div className="p-4 bg-white rounded-lg border border-blue-500/20 text-sm text-gray-700">
+            <strong>Overall Sentiment Trend:</strong> {newsSummary}
           </div>
         </CardContent>
       </Card>
 
-      {/* Impact on Your Holdings */}
-      <Card className="mb-6 border-purple-200 bg-purple-50">
+      <Card className="border-purple-200 bg-purple-50">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-purple-900">
             <AlertCircle className="w-5 h-5" />
             Impact on Your Holdings
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {impactOnPortfolio.map((item, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between p-4 bg-white rounded-lg border border-purple-600/20"
-              >
-                <span className="text-sm font-medium text-gray-700">
-                  {item.metric}
-                </span>
-                <span className="text-sm text-gray-900">{item.value}</span>
-              </div>
-            ))}
-            <Separator className="bg-purple-200" />
-            <div className="p-4 bg-white rounded-lg border border-purple-600/20">
-              <p className="text-sm text-gray-700">
-                <strong>Portfolio Impact:</strong> This stock represents 35% of
-                your portfolio. A 1% move in {symbol} translates to ~0.35%
-                portfolio move. Consider the high correlation with other tech
-                holdings.
-              </p>
-            </div>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between p-4 bg-white rounded-lg border border-purple-600/20">
+            <span className="text-sm font-medium text-gray-700">Direct Exposure</span>
+            <span className="text-sm text-gray-900">{directExposurePct.toFixed(1)}% of portfolio</span>
+          </div>
+          <div className="flex items-center justify-between p-4 bg-white rounded-lg border border-purple-600/20">
+            <span className="text-sm font-medium text-gray-700">Sector Exposure</span>
+            <span className="text-sm text-gray-900">
+              {sectorExposurePct.toFixed(1)}% in {meta.sector}
+            </span>
+          </div>
+          <div className="flex items-center justify-between p-4 bg-white rounded-lg border border-purple-600/20">
+            <span className="text-sm font-medium text-gray-700">Correlation Risk</span>
+            <span className="text-sm text-gray-900">
+              {correlationRisk}
+              {correlatedNames.length > 0 ? ` with ${correlatedNames.join(", ")}` : ""}
+            </span>
+          </div>
+          <Separator className="bg-purple-200" />
+          <div className="p-4 bg-white rounded-lg border border-purple-600/20 text-sm text-gray-700">
+            <strong>Portfolio Impact:</strong>{" "}
+            {directExposurePct > 0
+              ? `A 1% move in ${symbol} currently translates to about ${(directExposurePct / 100).toFixed(2)}% move in your portfolio.`
+              : `${symbol} is not currently a direct holding, but it can still affect your portfolio through sector correlation and peer sentiment.`}
           </div>
         </CardContent>
       </Card>
 
-      {/* Analysis Tabs */}
-      <Card>
-        <CardContent className="pt-6">
-          <Tabs defaultValue="fundamentals">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="fundamentals">Fundamentals</TabsTrigger>
-              <TabsTrigger value="technical">Technical</TabsTrigger>
-            </TabsList>
-            <TabsContent value="fundamentals" className="space-y-4 mt-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-sm text-gray-500 mb-1">Market Cap</p>
-                  <p className="text-xl font-semibold text-gray-900">$2.85T</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-sm text-gray-500 mb-1">P/E Ratio</p>
-                  <p className="text-xl font-semibold text-gray-900">29.4</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-sm text-gray-500 mb-1">EPS (TTM)</p>
-                  <p className="text-xl font-semibold text-gray-900">$6.20</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-sm text-gray-500 mb-1">Dividend Yield</p>
-                  <p className="text-xl font-semibold text-gray-900">0.52%</p>
-                </div>
-              </div>
-            </TabsContent>
-            <TabsContent value="technical" className="space-y-4 mt-4">
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <p className="text-sm text-gray-600 mb-3">Key Technical Levels</p>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">Resistance</span>
-                    <span className="text-sm font-medium text-red-600">$190.00</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">Current</span>
-                    <span className="text-sm font-medium text-gray-900">
-                      ${typeof stock.price === "number" ? stock.price.toFixed(2) : "—"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">Support</span>
-                    <span className="text-sm font-medium text-green-600">
-                      $175.00
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+      <SourcesModal
+        open={showSources}
+        loading={loadingNews}
+        sources={newsBySymbol}
+        onClose={() => setShowSources(false)}
+      />
     </div>
   );
 }

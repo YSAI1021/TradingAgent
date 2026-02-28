@@ -23,6 +23,25 @@ const rssParser = new Parser({
 const NEWS_PER_TICKER = 4
 const NEWS_BOT_USERNAME = 'NewsBot'
 const NEWS_BOT_EMAIL = 'newsbot@astratrade.local'
+const GOOGLE_NEWS_QUERY_OVERRIDES = {
+  BTC: 'Bitcoin OR BTC cryptocurrency',
+  ETH: 'Ethereum OR ETH cryptocurrency',
+  SOL: 'Solana OR SOL cryptocurrency',
+  IBIT: 'Bitcoin ETF',
+  GLD: 'Gold ETF',
+  VNQ: 'Real estate ETF',
+  BND: 'Bond ETF',
+  IEF: 'Treasury ETF',
+  DBC: 'Commodity ETF',
+  USO: 'Oil ETF',
+  UNG: 'Natural gas ETF',
+  BIL: 'cash management ETF',
+}
+const YAHOO_FEED_SYMBOL_OVERRIDES = {
+  BTC: 'BTC-USD',
+  ETH: 'ETH-USD',
+  SOL: 'SOL-USD',
+}
 const BLOCKED_IMAGE_HOSTS = ['news.google.com', 'lh3.googleusercontent.com', 'gstatic.com']
 const BLOCKED_META_HOSTS = [
   'news.google.com',
@@ -47,16 +66,23 @@ const BLOCKED_META_EXTENSIONS = [
   '.gif',
   '.webp',
 ]
+const getGoogleSearchQuery = (ticker) => {
+  const query = GOOGLE_NEWS_QUERY_OVERRIDES[ticker] || `${ticker} stock`
+  return `${query} finance`
+}
+
+const getYahooFeedSymbol = (ticker) => YAHOO_FEED_SYMBOL_OVERRIDES[ticker] || ticker
+
 const FEED_SOURCES = [
   {
     name: 'google',
     buildUrl: (ticker) =>
-      `https://news.google.com/rss/search?q=${encodeURIComponent(`${ticker} stock`)}&hl=en-US&gl=US&ceid=US:en`,
+      `https://news.google.com/rss/search?q=${encodeURIComponent(getGoogleSearchQuery(ticker))}&hl=en-US&gl=US&ceid=US:en`,
   },
   {
     name: 'yahoo',
     buildUrl: (ticker) =>
-      `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`,
+      `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(getYahooFeedSymbol(ticker))}&region=US&lang=en-US`,
   },
 ]
 
@@ -64,7 +90,7 @@ const sanitizeTickers = (tickers) => {
   if (!Array.isArray(tickers)) return []
   const normalized = tickers
     .map((t) => (typeof t === 'string' ? t.trim().toUpperCase() : ''))
-    .filter((t) => /^[A-Z]{1,5}$/.test(t))
+    .filter((t) => /^[A-Z]{1,6}$/.test(t))
   return [...new Set(normalized)]
 }
 

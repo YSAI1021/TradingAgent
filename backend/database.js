@@ -1,11 +1,28 @@
 import Database from 'better-sqlite3'
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const db = new Database(path.join(__dirname, 'trading_platform.db'))
+const defaultDbPath = path.join(__dirname, 'trading_platform.db')
+const configuredDbPath = typeof process.env.DB_PATH === 'string' ? process.env.DB_PATH.trim() : ''
+const dbPath = configuredDbPath ? path.resolve(configuredDbPath) : defaultDbPath
+
+if (configuredDbPath) {
+  const targetDir = path.dirname(dbPath)
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true })
+  }
+
+  // First-run bootstrap on persistent volume: copy bundled DB schema/data.
+  if (!fs.existsSync(dbPath) && fs.existsSync(defaultDbPath) && dbPath !== defaultDbPath) {
+    fs.copyFileSync(defaultDbPath, dbPath)
+  }
+}
+
+const db = new Database(dbPath)
 
 // Create tables
 db.exec(`
@@ -21,6 +38,52 @@ db.exec(`
     last_login_date DATE,
     login_streak INTEGER DEFAULT 0
   );
+
+  CREATE TABLE IF NOT EXISTS user_ai_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE,
+    gemini_api_key TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_user_ai_settings_user_id ON user_ai_settings(user_id);
+
+  CREATE TABLE IF NOT EXISTS user_onboarding_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE,
+    investor_type TEXT,
+    asset_types TEXT DEFAULT '[]',
+    risk_tolerance TEXT,
+    decision_horizon TEXT,
+    market_focus TEXT,
+    baseline_flags TEXT DEFAULT '[]',
+    investment_anchor TEXT,
+    completed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_onboarding_profiles_user_id ON user_onboarding_profiles(user_id);
+
+  CREATE TABLE IF NOT EXISTS thesis_equities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    bucket TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    company TEXT NOT NULL,
+    allocation TEXT NOT NULL,
+    thesis TEXT NOT NULL,
+    validity TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE (user_id, bucket, symbol)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_thesis_equities_user_bucket ON thesis_equities(user_id, bucket);
+  CREATE INDEX IF NOT EXISTS idx_thesis_equities_user_symbol ON thesis_equities(user_id, symbol);
 
   CREATE TABLE IF NOT EXISTS posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +205,20 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_activity_log_user_id ON user_activity_log(user_id);
   CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON user_activity_log(created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS thesis_decision_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL CHECK(event_type IN ('rule_honored', 'rule_override', 'panic_pause')),
+    rule_id INTEGER,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_decision_events_user ON thesis_decision_events(user_id);
+  CREATE INDEX IF NOT EXISTS idx_decision_events_type ON thesis_decision_events(user_id, event_type);
+  CREATE INDEX IF NOT EXISTS idx_decision_events_date ON thesis_decision_events(created_at DESC);
 `)
 
 // Migrate existing tables - add new columns if they don't exist
@@ -185,6 +262,40 @@ const migrateDatabase = () => {
     addPostColumnIfMissing('news_image_url', 'TEXT')
     addPostColumnIfMissing('sentiment', 'TEXT DEFAULT "neutral"')
     addPostColumnIfMissing('sentiment_confidence', 'REAL DEFAULT 0')
+
+    // Ensure new tables exist for onboarding and thesis persistence in older DBs.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_onboarding_profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL UNIQUE,
+        investor_type TEXT,
+        asset_types TEXT DEFAULT '[]',
+        risk_tolerance TEXT,
+        decision_horizon TEXT,
+        market_focus TEXT,
+        baseline_flags TEXT DEFAULT '[]',
+        investment_anchor TEXT,
+        completed_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS thesis_equities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        bucket TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        company TEXT NOT NULL,
+        allocation TEXT NOT NULL,
+        thesis TEXT NOT NULL,
+        validity TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE (user_id, bucket, symbol)
+      );
+    `)
 
     console.log('✓ Database migration completed')
   } catch (error) {

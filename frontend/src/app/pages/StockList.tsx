@@ -1,62 +1,34 @@
-import { useState, useEffect, useMemo, useRef } from "react";
-import { Link } from "react-router";
-import { fetchPosts, fetchNews, ingestNews, Post, NewsArticle } from "@/app/services/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
+import { fetchNews, fetchPosts, ingestNews, NewsArticle, Post } from "@/app/services/api";
 import { useAuth } from "@/app/context/AuthContext";
 import { usePortfolio } from "@/app/hooks/usePortfolio";
 import { useStockQuotes } from "@/app/hooks/useStockQuotes";
-import {
-  TrendingUp,
-  TrendingDown,
-  Minus,
-  Star,
-  Plus,
-  Search,
-  Pencil,
-} from "lucide-react";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardContent,
-} from "@/app/components/ui/card";
+import { Minus, Plus, Search, Star, TrendingDown, TrendingUp } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Input } from "@/app/components/ui/input";
 import { Button } from "@/app/components/ui/button";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/app/components/ui/tabs";
-import { AddTransactionModal } from "@/app/components/AddTransactionModal";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/tabs";
 import AddWatchlistModal from "@/app/components/AddWatchlistModal";
 
-export function StockList() {
-  const [addTransactionOpen, setAddTransactionOpen] = useState(false);
-  const { token } = useAuth();
-  const { holdings: currentHoldingsData, totalValue: portfolioTotal } =
-    usePortfolio();
-  const currentHoldings = currentHoldingsData.map((h) => ({
-    ...h,
-    price: h.currentPrice,
-    change: h.changePercent,
-    value: h.value,
-  }));
-  const { quotes } = useStockQuotes(["AMD", "COIN", "PLTR", "SHOP", "SQ"]);
-  const watchlistMeta = [
-    { symbol: "AMD", name: "AMD Inc.", sector: "Technology" },
-    { symbol: "COIN", name: "Coinbase", sector: "Technology" },
-    { symbol: "PLTR", name: "Palantir Technologies", sector: "Technology" },
-    { symbol: "SHOP", name: "Shopify Inc.", sector: "Technology" },
-    { symbol: "SQ", name: "Block Inc.", sector: "Technology" },
-  ];
-  const watchlist = watchlistMeta.map((w) => ({
-    ...w,
-    price: quotes[w.symbol]?.price ?? 0,
-    change: quotes[w.symbol]?.changePercent ?? 0,
-  }));
+const WATCHLIST_META: Record<string, { name: string; sector: string }> = {
+  AMD: { name: "Advanced Micro Devices", sector: "Technology" },
+  COIN: { name: "Coinbase Global", sector: "Financial Services" },
+  PLTR: { name: "Palantir Technologies", sector: "Technology" },
+  SHOP: { name: "Shopify", sector: "Technology" },
+  SQ: { name: "Block", sector: "Financial Services" },
+  UNH: { name: "UnitedHealth Group", sector: "Healthcare" },
+  XOM: { name: "Exxon Mobil", sector: "Energy" },
+  AAPL: { name: "Apple Inc.", sector: "Technology" },
+  GOOGL: { name: "Alphabet Inc.", sector: "Technology" },
+};
 
-  // Load custom watchlist and mode from localStorage
+export function StockList() {
+  const navigate = useNavigate();
+  const { token } = useAuth();
+  const { holdings: currentHoldingsData, totalValue: portfolioTotal } = usePortfolio();
+  const [query, setQuery] = useState("");
   const [customWatchlist, setCustomWatchlist] = useState<string[]>([]);
   const [watchlistMode, setWatchlistMode] = useState<"auto" | "custom">("auto");
   const [isEditMode, setIsEditMode] = useState(false);
@@ -65,18 +37,30 @@ export function StockList() {
   const [isFetchingNews, setIsFetchingNews] = useState(false);
   const [newsStatus, setNewsStatus] = useState("");
   const [newsCache, setNewsCache] = useState<Record<string, NewsArticle[]>>({});
-  const [hoverNews, setHoverNews] = useState<{ ticker: string | null; items: NewsArticle[] }>({ ticker: null, items: [] });
+  const [hoverNews, setHoverNews] = useState<{ ticker: string | null; items: NewsArticle[] }>({
+    ticker: null,
+    items: [],
+  });
   const [showWatchlistPeek, setShowWatchlistPeek] = useState(false);
   const hoverTimeoutRef = useRef<number | null>(null);
+
+  const currentHoldings = currentHoldingsData.map((h) => ({
+    ...h,
+    price: h.currentPrice,
+    change: h.changePercent,
+    value: h.value,
+  }));
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem("customWatchlist");
       const savedMode = localStorage.getItem("watchlistMode");
       if (saved) setCustomWatchlist(JSON.parse(saved));
-      if (savedMode === "auto" || savedMode === "custom") setWatchlistMode(savedMode as "auto" | "custom");
-    } catch (e) {
-      console.warn("Failed to load custom watchlist", e);
+      if (savedMode === "auto" || savedMode === "custom") {
+        setWatchlistMode(savedMode as "auto" | "custom");
+      }
+    } catch (error) {
+      console.warn("Failed to load custom watchlist", error);
     }
   }, []);
 
@@ -85,80 +69,85 @@ export function StockList() {
       try {
         const data = await fetchPosts(100, 0);
         setPosts(data || []);
-      } catch (err) {
-        console.error("Failed to load posts for auto watchlist", err);
+      } catch (error) {
+        console.error("Failed to load posts for auto watchlist", error);
       }
     };
     load();
   }, []);
 
   const autoStockList = useMemo(() => {
-    const defaultStocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
-    if (!posts || posts.length === 0) return defaultStocks;
+    const defaults = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "UNH", "XOM"];
+    if (posts.length === 0) return defaults;
     const counts: Record<string, number> = {};
-    posts.forEach((p) => {
-      if (p.stock_ticker) counts[p.stock_ticker] = (counts[p.stock_ticker] || 0) + 1;
+    posts.forEach((post) => {
+      if (!post.stock_ticker) return;
+      counts[post.stock_ticker] = (counts[post.stock_ticker] || 0) + 1;
     });
-    const uniques = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
-    const combined = [...uniques];
-    defaultStocks.forEach((s) => { if (!combined.includes(s)) combined.push(s); });
-    return combined.slice(0, 10);
+    const fromCommunity = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+    const merged = [...fromCommunity];
+    defaults.forEach((ticker) => {
+      if (!merged.includes(ticker)) merged.push(ticker);
+    });
+    return merged.slice(0, 12);
   }, [posts]);
 
   const stockListSymbols = useMemo(() => {
-    if (watchlistMode === "custom") return customWatchlist;
-    return autoStockList;
+    return watchlistMode === "custom" ? customWatchlist : autoStockList;
   }, [watchlistMode, customWatchlist, autoStockList]);
+
+  const { quotes } = useStockQuotes(Array.from(new Set([...stockListSymbols, "AMD", "COIN", "PLTR", "SHOP", "SQ"])));
+
+  const filteredHoldings = useMemo(() => {
+    if (!query.trim()) return currentHoldings;
+    const q = query.toLowerCase();
+    return currentHoldings.filter(
+      (stock) =>
+        stock.symbol.toLowerCase().includes(q) ||
+        stock.name.toLowerCase().includes(q) ||
+        stock.sector.toLowerCase().includes(q),
+    );
+  }, [currentHoldings, query]);
+
+  const filteredWatchlistSymbols = useMemo(() => {
+    if (!query.trim()) return stockListSymbols;
+    const q = query.toLowerCase();
+    return stockListSymbols.filter((symbol) => {
+      const meta = WATCHLIST_META[symbol];
+      return (
+        symbol.toLowerCase().includes(q) ||
+        meta?.name?.toLowerCase().includes(q) ||
+        meta?.sector?.toLowerCase().includes(q)
+      );
+    });
+  }, [stockListSymbols, query]);
 
   const handleAddStock = (ticker: string) => {
     const symbol = ticker.toUpperCase().trim();
-    if (!symbol) return;
-    if (!/^[A-Z]{1,5}$/.test(symbol)) {
-      alert("Invalid stock ticker format (1-5 uppercase letters)");
-      return;
-    }
-    if (customWatchlist.includes(symbol)) {
-      // already present
-      return;
-    }
+    if (!symbol || !/^[A-Z]{1,5}$/.test(symbol)) return;
+    if (customWatchlist.includes(symbol)) return;
     const updated = [...customWatchlist, symbol];
     setCustomWatchlist(updated);
     localStorage.setItem("customWatchlist", JSON.stringify(updated));
-    // keep edit mode active
+    setWatchlistMode("custom");
+    localStorage.setItem("watchlistMode", "custom");
     setIsEditMode(true);
     setShowAddModal(false);
   };
 
-  const handleSyncNews = async () => {
-    if (isFetchingNews) return;
-    const tickersToSync = stockListSymbols.slice(0, 6);
-    if (tickersToSync.length === 0) {
-      setNewsStatus("No tickers in your watchlist yet.");
-      return;
-    }
-    setIsFetchingNews(true);
-    setNewsStatus(`Pulling headlines for ${tickersToSync.join(', ')}...`);
-    try {
-      // ingestNews requires auth token
-      await ingestNews(token || '', tickersToSync);
-      setNewsStatus(`News synced`);
-      // invalidate cached news for these tickers
-      setNewsCache((prev) => {
-        const next = { ...prev };
-        tickersToSync.forEach((t) => delete next[t]);
-        return next;
-      });
-    } catch (err) {
-      console.error('Failed to sync news', err);
-      setNewsStatus('Failed to fetch news. Please try again.');
-    } finally {
-      setIsFetchingNews(false);
-      setTimeout(() => setNewsStatus(''), 3000);
-    }
+  const handleRemoveStock = (ticker: string) => {
+    const updated = customWatchlist.filter((value) => value !== ticker);
+    setCustomWatchlist(updated);
+    localStorage.setItem("customWatchlist", JSON.stringify(updated));
   };
 
-  const loadHoverNews = async (ticker?: string) => {
-    if (!ticker) return;
+  const handleToggleMode = (mode: "auto" | "custom") => {
+    setWatchlistMode(mode);
+    localStorage.setItem("watchlistMode", mode);
+    if (mode === "auto") setIsEditMode(false);
+  };
+
+  const loadHoverNews = async (ticker: string) => {
     if (newsCache[ticker]) {
       setHoverNews({ ticker, items: newsCache[ticker] });
       return;
@@ -168,45 +157,55 @@ export function StockList() {
       const top = Array.isArray(items) ? items.slice(0, 3) : [];
       setNewsCache((prev) => ({ ...prev, [ticker]: top }));
       setHoverNews({ ticker, items: top });
-    } catch (err) {
-      console.error('Failed to load hover news for', ticker, err);
+    } catch (error) {
+      console.error("Failed to load hover news for", ticker, error);
     }
   };
 
   const handleMouseEnterTicker = (ticker: string) => {
     if (hoverTimeoutRef.current) window.clearTimeout(hoverTimeoutRef.current);
     hoverTimeoutRef.current = window.setTimeout(() => {
-      loadHoverNews(ticker);
+      void loadHoverNews(ticker);
     }, 250);
   };
 
   const handleMouseLeaveTicker = () => {
-    if (hoverTimeoutRef.current) {
-      window.clearTimeout(hoverTimeoutRef.current);
-      hoverTimeoutRef.current = null;
-    }
-    // small delay before clearing so panel can be hovered
+    if (hoverTimeoutRef.current) window.clearTimeout(hoverTimeoutRef.current);
+    hoverTimeoutRef.current = null;
     setTimeout(() => setHoverNews({ ticker: null, items: [] }), 150);
   };
 
-  const handleRemoveStock = (ticker: string) => {
-    const updated = customWatchlist.filter((t) => t !== ticker);
-    setCustomWatchlist(updated);
-    localStorage.setItem("customWatchlist", JSON.stringify(updated));
-  };
+  const handleSyncNews = async () => {
+    if (!token || isFetchingNews) return;
+    const tickersToSync = stockListSymbols.slice(0, 8);
+    if (tickersToSync.length === 0) {
+      setNewsStatus("No tickers in your watchlist yet.");
+      return;
+    }
 
-  const handleToggleMode = (mode: "auto" | "custom") => {
-    setWatchlistMode(mode);
-    localStorage.setItem("watchlistMode", mode);
-    setIsEditMode(false);
-    setShowAddModal(false);
+    setIsFetchingNews(true);
+    setNewsStatus(`Pulling headlines for ${tickersToSync.join(", ")}...`);
+    try {
+      await ingestNews(token, tickersToSync);
+      setNewsStatus("News synced");
+      setNewsCache((prev) => {
+        const next = { ...prev };
+        tickersToSync.forEach((ticker) => delete next[ticker]);
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to sync news", error);
+      setNewsStatus("Failed to fetch news. Please try again.");
+    } finally {
+      setIsFetchingNews(false);
+      setTimeout(() => setNewsStatus(""), 3000);
+    }
   };
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
-      {/* Header */}
       <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-3xl font-semibold text-gray-900">Stocks</h1>
             <p className="text-gray-500 mt-1">Your holdings and watchlist</p>
@@ -214,6 +213,7 @@ export function StockList() {
           <Button
             onClick={() => {
               setWatchlistMode("custom");
+              localStorage.setItem("watchlistMode", "custom");
               setIsEditMode(true);
               setShowAddModal(true);
             }}
@@ -223,10 +223,11 @@ export function StockList() {
           </Button>
         </div>
 
-        {/* Search */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
           <Input
+            value={query}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
             placeholder="Search stocks by symbol or name..."
             className="pl-10"
           />
@@ -242,21 +243,11 @@ export function StockList() {
         <TabsContent value="holdings">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Current Holdings</CardTitle>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setAddTransactionOpen(true)}
-                >
-                  <Pencil className="w-4 h-4 mr-2" />
-                  Edit Holdings
-                </Button>
-              </div>
+              <CardTitle>Current Holdings</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {currentHoldings.map((stock) => (
+                {filteredHoldings.map((stock) => (
                   <Link
                     key={stock.symbol}
                     to={`/stock/${stock.symbol}`}
@@ -265,24 +256,18 @@ export function StockList() {
                     <div className="flex items-center gap-4 flex-1">
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
-                          <p className="font-semibold text-gray-900">
-                            {stock.symbol}
-                          </p>
+                          <p className="font-semibold text-gray-900">{stock.symbol}</p>
                           <Badge variant="outline" className="text-xs">
                             {stock.sector}
                           </Badge>
                         </div>
                         <p className="text-sm text-gray-500">{stock.name}</p>
-                        <p className="text-xs text-gray-400 mt-1">
-                          {stock.shares} shares
-                        </p>
+                        <p className="text-xs text-gray-400 mt-1">{stock.shares} shares</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-6">
                       <div className="text-right">
-                        <p className="text-sm text-gray-500 mb-1">
-                          Position Value
-                        </p>
+                        <p className="text-sm text-gray-500 mb-1">Position Value</p>
                         <p className="font-semibold text-gray-900">
                           $
                           {(stock.value ?? 0).toLocaleString(undefined, {
@@ -295,7 +280,13 @@ export function StockList() {
                           ${(stock.price ?? 0).toFixed(2)}
                         </p>
                         <div
-                          className={`flex items-center gap-1 text-sm ${(stock.change ?? 0) > 0 ? "text-green-600" : (stock.change ?? 0) < 0 ? "text-red-600" : "text-gray-500"}`}
+                          className={`flex items-center gap-1 text-sm ${
+                            (stock.change ?? 0) > 0
+                              ? "text-green-600"
+                              : (stock.change ?? 0) < 0
+                                ? "text-red-600"
+                                : "text-gray-500"
+                          }`}
                         >
                           {(stock.change ?? 0) > 0 ? (
                             <TrendingUp className="w-3 h-3" />
@@ -335,70 +326,65 @@ export function StockList() {
               <CardTitle>Watchlist</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <button
-                    className={`px-3 py-1 rounded ${watchlistMode === 'auto' ? 'bg-gray-100' : 'bg-white'}`}
-                    onClick={() => handleToggleMode('auto')}
+                  <Button
+                    variant={watchlistMode === "auto" ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => handleToggleMode("auto")}
                   >
                     Auto
-                  </button>
-                  <button
-                    className={`px-3 py-1 rounded ${watchlistMode === 'custom' ? 'bg-gray-100' : 'bg-white'}`}
-                    onClick={() => handleToggleMode('custom')}
+                  </Button>
+                  <Button
+                    variant={watchlistMode === "custom" ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => handleToggleMode("custom")}
                   >
                     Custom
-                  </button>
+                  </Button>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleSyncNews}
-                    className="px-3 py-1 rounded bg-white"
-                    disabled={isFetchingNews}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleSyncNews()}
+                    disabled={isFetchingNews || !token}
                   >
-                    {isFetchingNews ? 'Syncing...' : 'Sync watchlist news'}
-                  </button>
-                  <button
-                    onClick={() => setShowWatchlistPeek((s) => !s)}
-                    className="px-3 py-1 rounded bg-white"
+                    {isFetchingNews ? "Syncing..." : "Sync watchlist news"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowWatchlistPeek((prev) => !prev)}
                   >
-                    {showWatchlistPeek ? 'Hide Watchlist' : 'Quick Watchlist'}
-                  </button>
-                </div>
-                {watchlistMode === 'custom' && (
-                  <div className="flex items-center gap-2">
-                    <button
+                    {showWatchlistPeek ? "Hide Watchlist" : "Quick Watchlist"}
+                  </Button>
+                  {watchlistMode === "custom" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => {
                         const next = !isEditMode;
                         setIsEditMode(next);
-                        // When entering edit mode, show the add input by default
-                        setShowAddStock(next);
                       }}
-                      className={`px-3 py-1 rounded ${isEditMode ? 'bg-green-100' : 'bg-white'}`}
                     >
-                      ✎ Edit
-                    </button>
-                    {isEditMode && (
-                      <button
-                        onClick={() => setShowAddModal(true)}
-                        className="px-3 py-1 rounded bg-white"
-                      >
-                        + Add Stock
-                      </button>
-                    )}
-                  </div>
-                )}
+                      {isEditMode ? "Done" : "Edit"}
+                    </Button>
+                  )}
+                </div>
               </div>
-              
+
+              {newsStatus && <p className="mb-3 text-xs text-gray-500">{newsStatus}</p>}
 
               <div className="space-y-3">
-                {stockListSymbols.length === 0 ? (
+                {filteredWatchlistSymbols.length === 0 ? (
                   <p className="text-sm text-gray-500">No stocks to display</p>
                 ) : (
-                  stockListSymbols.map((symbol) => {
-                    const meta = watchlist.find((w) => w.symbol === symbol);
-                    const name = meta?.name || symbol;
-                    const sector = meta?.sector || 'Unknown';
+                  filteredWatchlistSymbols.map((symbol) => {
+                    const meta = WATCHLIST_META[symbol] || {
+                      name: symbol,
+                      sector: "Other",
+                    };
                     const price = quotes[symbol]?.price ?? 0;
                     const change = quotes[symbol]?.changePercent ?? 0;
 
@@ -414,30 +400,47 @@ export function StockList() {
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
                               <p className="font-semibold text-gray-900">{symbol}</p>
-                              <Badge variant="outline" className="text-xs">{sector}</Badge>
+                              <Badge variant="outline" className="text-xs">
+                                {meta.sector}
+                              </Badge>
                             </div>
-                            <p className="text-sm text-gray-500">{name}</p>
+                            <p className="text-sm text-gray-500">{meta.name}</p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-4">
                           <div className="text-right">
                             <p className="font-semibold text-gray-900">${price.toFixed(2)}</p>
-                            <div className={`flex items-center gap-1 text-sm ${change > 0 ? 'text-green-600' : change < 0 ? 'text-red-600' : 'text-gray-500'}`}>
-                              {change > 0 ? <TrendingUp className="w-3 h-3" /> : change < 0 ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
-                              {change > 0 ? '+' : ''}{change.toFixed(2)}%
+                            <div
+                              className={`flex items-center gap-1 text-sm ${
+                                change > 0 ? "text-green-600" : change < 0 ? "text-red-600" : "text-gray-500"
+                              }`}
+                            >
+                              {change > 0 ? (
+                                <TrendingUp className="w-3 h-3" />
+                              ) : change < 0 ? (
+                                <TrendingDown className="w-3 h-3" />
+                              ) : (
+                                <Minus className="w-3 h-3" />
+                              )}
+                              {change > 0 ? "+" : ""}
+                              {change.toFixed(2)}%
                             </div>
                           </div>
-                          {watchlistMode === 'custom' && isEditMode ? (
+
+                          {watchlistMode === "custom" && isEditMode ? (
                             <button
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveStock(symbol); }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleRemoveStock(symbol);
+                              }}
                               className="px-2 py-1 rounded bg-red-50 text-red-600"
                               title="Remove from watchlist"
                             >
                               ×
                             </button>
-                          ) : null}
-                          {watchlistMode !== 'custom' && (
+                          ) : watchlistMode !== "custom" ? (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -445,22 +448,16 @@ export function StockList() {
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                // toggle favorite: add to custom watchlist and switch to custom mode
-                                const exists = customWatchlist.includes(symbol);
-                                if (exists) {
-                                  handleRemoveStock(symbol);
-                                } else {
-                                  const updated = [...customWatchlist, symbol];
-                                  setCustomWatchlist(updated);
-                                  localStorage.setItem("customWatchlist", JSON.stringify(updated));
-                                  setWatchlistMode('custom');
-                                  setIsEditMode(true);
-                                }
+                                const updated = customWatchlist.includes(symbol)
+                                  ? customWatchlist.filter((value) => value !== symbol)
+                                  : [...customWatchlist, symbol];
+                                setCustomWatchlist(updated);
+                                localStorage.setItem("customWatchlist", JSON.stringify(updated));
                               }}
                             >
                               <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
                             </Button>
-                          )}
+                          ) : null}
                         </div>
                       </Link>
                     );
@@ -472,31 +469,21 @@ export function StockList() {
         </TabsContent>
       </Tabs>
 
-      {/* Add Transaction Modal */}
-      {token && (
-        <AddTransactionModal
-          open={addTransactionOpen}
-          onOpenChange={setAddTransactionOpen}
-          onSuccess={() => {
-            setAddTransactionOpen(false);
-            window.location.reload();
-          }}
-          token={token}
-        />
-      )}
       {showWatchlistPeek && stockListSymbols.length > 0 && (
-        <div className={`fixed right-6 top-24 z-40 w-56 rounded-lg bg-white p-3 shadow-lg`}>
+        <div className="fixed right-6 top-24 z-40 w-56 rounded-lg bg-white p-3 shadow-lg">
           <div className="mb-2 font-semibold">Quick Watchlist</div>
           <div className="flex flex-wrap gap-2">
-            {stockListSymbols.map((t) => (
+            {stockListSymbols.map((ticker) => (
               <button
-                key={t}
-                className={`px-2 py-1 rounded border text-sm ${hoverNews.ticker === t ? 'bg-gray-100' : ''}`}
-                onClick={() => (window.location.href = `/stock/${t}`)}
-                onMouseEnter={() => handleMouseEnterTicker(t)}
+                key={ticker}
+                className={`px-2 py-1 rounded border text-sm ${
+                  hoverNews.ticker === ticker ? "bg-gray-100" : ""
+                }`}
+                onClick={() => navigate(`/stock/${ticker}`)}
+                onMouseEnter={() => handleMouseEnterTicker(ticker)}
                 onMouseLeave={handleMouseLeaveTicker}
               >
-                {t}
+                {ticker}
               </button>
             ))}
           </div>
@@ -505,23 +492,28 @@ export function StockList() {
 
       {hoverNews.ticker && hoverNews.items.length > 0 && (
         <div className="fixed right-80 top-24 z-50 w-96 rounded-lg bg-white p-3 shadow-lg">
-          <div className="mb-2 font-semibold">News for ${hoverNews.ticker}</div>
+          <div className="mb-2 font-semibold">News for {hoverNews.ticker}</div>
           <div className="space-y-2">
             {hoverNews.items.map((item) => (
-              <a key={item.id || item.news_url} href={item.news_url} target="_blank" rel="noreferrer" className="block">
+              <a
+                key={item.id || item.news_url}
+                href={item.news_url}
+                target="_blank"
+                rel="noreferrer"
+                className="block"
+              >
                 <div className="text-sm font-medium">{item.title}</div>
-                <div className="text-xs text-gray-500">{item.news_source} • {item.news_published_at ? new Date(item.news_published_at).toLocaleDateString() : ''}</div>
+                <div className="text-xs text-gray-500">
+                  {item.news_source} •{" "}
+                  {item.news_published_at ? new Date(item.news_published_at).toLocaleDateString() : ""}
+                </div>
               </a>
             ))}
           </div>
         </div>
       )}
-      {/* Add Watchlist Modal */}
-      <AddWatchlistModal
-        open={showAddModal}
-        onClose={() => setShowAddModal(false)}
-        onAdd={async (symbol: string) => handleAddStock(symbol)}
-      />
+
+      <AddWatchlistModal open={showAddModal} onClose={() => setShowAddModal(false)} onAdd={handleAddStock} />
     </div>
   );
 }

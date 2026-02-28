@@ -1,0 +1,3 @@
+node_modules
+trading_platform.db
+.env

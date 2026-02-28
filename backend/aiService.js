@@ -2,6 +2,13 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 
 // Initialize Google Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '')
+const DEFAULT_GENERATION_CONFIG = {
+  temperature: 0.35,
+  maxOutputTokens: 320,
+  topP: 0.9,
+}
+const MAX_REPLY_WORDS = 180
+const MAX_REPLY_SENTENCES = 6
 
 /**
  * Common stock ticker patterns for extraction
@@ -113,7 +120,7 @@ export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
       return {
         success: false,
         error: 'Gemini API key not configured',
-        message: 'Please set your Gemini API key in Settings to use the AI Assistant.',
+        message: 'Please set your Gemini API key in Add Key to use the AI Assistant.',
       }
     }
 
@@ -135,9 +142,17 @@ export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
 
     // If only one user message, use simple generation
     if (filteredMessages.length === 1 && filteredMessages[0].role === 'user') {
-      const result = await model.generateContent(systemPrompt + '\n\nUser question: ' + filteredMessages[0].content)
+      const result = await model.generateContent({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: systemPrompt + '\n\nUser question: ' + filteredMessages[0].content }],
+          },
+        ],
+        generationConfig: DEFAULT_GENERATION_CONFIG,
+      })
       const response = await result.response
-      const aiMessage = response.text()
+      const aiMessage = normalizeAiReply(response.text())
 
       return {
         success: true,
@@ -167,17 +182,14 @@ export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
     // Start chat with history (excluding last message)
     const chat = model.startChat({
       history: conversationHistory.slice(0, -1),
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 1000,
-      },
+      generationConfig: DEFAULT_GENERATION_CONFIG,
     })
 
     // Send the last message
     const lastMessage = conversationHistory[conversationHistory.length - 1]
     const result = await chat.sendMessage(lastMessage.parts[0].text)
     const response = await result.response
-    const aiMessage = response.text()
+    const aiMessage = normalizeAiReply(response.text())
 
     return {
       success: true,
@@ -190,7 +202,7 @@ export const chatWithAI = async ({ messages, context = {}, apiKey }) => {
       return {
         success: false,
         error: 'Invalid Gemini API key',
-        message: 'AI service is misconfigured. Please contact administrator.',
+        message: 'Gemini API key is invalid or revoked. Please add a valid key in Add Key.',
       }
     }
 
@@ -224,13 +236,21 @@ Your role is to help users with:
 
 Guidelines:
 - Be professional, helpful, and educational
-- Always include disclaimers that this is not financial advice
-- Encourage users to do their own research (DYOR)
+- Keep responses concise and easy to scan
 - Focus on education rather than specific buy/sell recommendations
 - Be cautious and highlight risks in trading
 - IMPORTANT: When giving recommendations, consider the user's CURRENT PORTFOLIO holdings listed below
 - IMPORTANT: When relevant news is provided below, USE IT to support your analysis with specific citations
 - When citing news, mention the source and provide context from the article
+- Always use this compact plain-text structure:
+  Summary: 1 sentence
+  Key points:
+  - 2 to 4 short bullets
+  Action:
+  - 1 short next step
+  TL;DR: 1 sentence
+- Target 90 to 160 words. Hard cap 220 words.
+- No markdown tables, no code blocks, no long disclaimers.
 `
 
   // Add detailed portfolio context if available
@@ -309,9 +329,48 @@ Guidelines:
     prompt += `\n- Provide the article URL for users to read more`
   }
 
-  prompt += `\nAlways remind users that you provide educational information only, not financial advice.`
+  prompt += `\nOnly include a disclaimer if the user explicitly asks for legal/compliance caveats.`
 
   return prompt
+}
+
+const normalizeAiReply = (text) => {
+  const cleaned = String(text || '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  if (!cleaned) {
+    return 'Summary: I could not generate a response.\nKey points:\n- Please retry your question.\nTL;DR: Retry once.'
+  }
+
+  const words = cleaned.split(/\s+/).filter(Boolean)
+  const sentenceList = cleaned
+    .replace(/\n+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  const summary = sentenceList[0] || words.slice(0, 20).join(' ')
+  const hasTldr = /(^|\n)\s*(TL;DR|Conclusion)\s*:/i.test(cleaned)
+
+  if (words.length <= MAX_REPLY_WORDS && sentenceList.length <= MAX_REPLY_SENTENCES) {
+    return hasTldr ? cleaned : `${cleaned}\n\nTL;DR: ${summary}`
+  }
+
+  const conciseSentences = sentenceList.slice(0, Math.max(2, MAX_REPLY_SENTENCES))
+  let compact = conciseSentences.join(' ')
+  const compactWords = compact.split(/\s+/).filter(Boolean)
+  if (compactWords.length > MAX_REPLY_WORDS) {
+    compact = `${compactWords.slice(0, MAX_REPLY_WORDS).join(' ')}...`
+  }
+  if (!/(^|\n)\s*(TL;DR|Conclusion)\s*:/i.test(compact)) {
+    compact = `${compact}\n\nTL;DR: ${summary}`
+  }
+  return compact
 }
 
 /**

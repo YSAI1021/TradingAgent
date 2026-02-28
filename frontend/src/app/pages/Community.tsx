@@ -3,7 +3,6 @@ import {
   TrendingUp,
   Sparkles,
   MessageCircle,
-  ExternalLink,
   Plus,
   Hash,
   Loader2,
@@ -11,6 +10,11 @@ import {
   Trash2,
   Edit2,
   Eye,
+  ThumbsUp,
+  ThumbsDown,
+  Bookmark,
+  Repeat2,
+  ExternalLink,
 } from "lucide-react";
 import { useAuth } from "@/app/context/AuthContext";
 import {
@@ -23,10 +27,14 @@ import {
   updatePost,
   fetchPost,
   fetchUserActivity,
+  fetchNews,
   Post,
   Comment,
   ActivitySummary,
+  NewsArticle,
 } from "@/app/services/api";
+import { usePortfolio } from "@/app/hooks/usePortfolio";
+import SourcesModal from "@/app/components/SourcesModal";
 import {
   Card,
   CardHeader,
@@ -50,6 +58,7 @@ import { Label } from "@/app/components/ui/label";
 
 export function Community() {
   const { token, user } = useAuth();
+  const { holdings } = usePortfolio();
   const [createPostOpen, setCreatePostOpen] = useState(false);
   const [postContent, setPostContent] = useState("");
   const [postTitle, setPostTitle] = useState("");
@@ -88,6 +97,9 @@ export function Community() {
   const [editLoading, setEditLoading] = useState(false);
   const [activitySummary, setActivitySummary] = useState<ActivitySummary | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [showSources, setShowSources] = useState(false);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [sourcesData, setSourcesData] = useState<Record<string, NewsArticle[]>>({});
 
   // Fetch posts on mount
   useEffect(() => {
@@ -127,8 +139,8 @@ export function Community() {
           post.user_id?.toString().charAt(0) ||
           "U",
         time: new Date(post.created_at).toLocaleDateString(),
-        likes: Math.floor(Math.random() * 50),
-        dislikes: Math.floor(Math.random() * 5),
+        likes: ((post.id * 7 + 13) % 50),
+        dislikes: ((post.id * 3 + 1) % 5),
         comments: post.comment_count ?? 0,
       }));
       setPosts(transformedPosts);
@@ -139,6 +151,41 @@ export function Community() {
       setLoading(false);
     }
   };
+
+  const loadCommunitySources = async () => {
+    const tickers = holdings.map((holding) => holding.symbol).slice(0, 6);
+    if (tickers.length === 0) {
+      setSourcesData({});
+      setShowSources(true);
+      return;
+    }
+
+    setSourcesLoading(true);
+    const results: Record<string, NewsArticle[]> = {};
+    try {
+      await Promise.all(
+        tickers.map(async (ticker) => {
+          try {
+            const items = await fetchNews(ticker);
+            results[ticker] = Array.isArray(items) ? items.slice(0, 6) : [];
+          } catch {
+            results[ticker] = [];
+          }
+        }),
+      );
+      setSourcesData(results);
+      setShowSources(true);
+    } catch (error) {
+      console.error("Error loading community sources:", error);
+      setSourcesData(results);
+      setShowSources(true);
+    } finally {
+      setSourcesLoading(false);
+    }
+  };
+
+  const topHolding = [...holdings].sort((a, b) => b.value - a.value)[0];
+  const secondaryHolding = [...holdings].sort((a, b) => b.value - a.value)[1];
 
   const trendingTopics = [
     { topic: "AI Stocks", posts: 147, sentiment: "Bullish" },
@@ -331,7 +378,13 @@ export function Community() {
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
                   setPostContent(e.target.value)
                 }
-                className="mt-2 min-h-[120px]"
+                onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    void handleCreatePost();
+                  }
+                }}
+                className="mt-2 min-h-[120px] max-h-[280px] overflow-y-auto"
               />
             </div>
             <div>
@@ -352,28 +405,16 @@ export function Community() {
                 className="mt-2"
               />
             </div>
-            {postContent && (
-              <div className="p-3 bg-gray-50 rounded-lg border">
-                <p className="text-xs font-medium text-gray-500 mb-2">
-                  Preview
-                </p>
-                <p className="text-sm text-gray-700">{postContent}</p>
-                {postHashtags && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {postHashtags
-                      .split(/\s+/)
-                      .filter(Boolean)
-                      .map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant="secondary"
-                          className="text-xs"
-                        >
-                          {tag.startsWith("#") ? tag : `#${tag}`}
-                        </Badge>
-                      ))}
-                  </div>
-                )}
+            {postHashtags && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {postHashtags
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .map((tag) => (
+                    <Badge key={tag} variant="secondary" className="text-xs">
+                      {tag.startsWith("#") ? tag : `#${tag}`}
+                    </Badge>
+                  ))}
               </div>
             )}
           </div>
@@ -422,6 +463,7 @@ export function Community() {
               variant="ghost"
               size="sm"
               className="ml-auto h-6 px-2 text-xs"
+              onClick={() => void loadCommunitySources()}
             >
               <ExternalLink className="w-3 h-3 mr-1" />
               Sources
@@ -429,7 +471,6 @@ export function Community() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Consensus Section - neutral background */}
           <div className="p-4 bg-white rounded-lg border border-blue-500/20">
             <p className="text-xs font-semibold text-[#1e40af] uppercase tracking-wider mb-2">
               Consensus
@@ -438,37 +479,35 @@ export function Community() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-gray-900">
-                    85% of community bullish on NVDA earnings
+                    Community momentum remains strongest around {topHolding?.symbol || "your top holding"}
                   </span>
                   <Badge className="bg-emerald-100 text-emerald-800 border-0">
-                    Strong agree
+                    Positive
                   </Badge>
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  You hold 15% of portfolio in NVDA — community optimism aligns
-                  with your position.
+                  Why it matters: {topHolding?.symbol || "This name"} has the largest weight in
+                  your portfolio, so crowd sentiment can materially affect your near-term decision
+                  flow.
                 </p>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-gray-900">
-                    78% bullish on tech sector outlook
+                    Discussion volume is rising around {secondaryHolding?.symbol || "your secondary positions"}
                   </span>
-                  <Badge className="bg-emerald-100 text-emerald-800 border-0">
-                    Agree
+                  <Badge className="bg-gray-100 text-black border-0">
+                    Active
                   </Badge>
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  Your tech holdings represent 65% of portfolio — strong tech
-                  sentiment is favorable.
+                  Why it matters: sentiment shifts around your top holdings can front-run short-term
+                  volatility in your portfolio.
                 </p>
               </div>
             </div>
           </div>
 
-          {/* Controversy Section - neutral background */}
           <div className="p-4 bg-white rounded-lg border border-blue-500/20">
             <p className="text-xs font-semibold text-[#1e40af] uppercase tracking-wider mb-2">
               Controversy
@@ -477,31 +516,28 @@ export function Community() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-gray-900">
-                    Community split 50/50 on TSLA valuation
+                    Opinion is split on valuation-sensitive tech names
                   </span>
                   <Badge className="bg-gray-100 text-black border-0">
                     Divided
                   </Badge>
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  You recently bought TSLA — consider reviewing due to mixed
-                  sentiment.
+                  Why it matters: your portfolio has multiple growth names where sentiment reversals
+                  can amplify downside moves.
                 </p>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-gray-900">
-                    Energy sector showing controversy (45% bullish / 55%
-                    bearish)
+                    Macro-sensitive sectors remain mixed across forums
                   </span>
                   <Badge className="bg-gray-100 text-black border-0">
                     Mixed
                   </Badge>
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
-                  <span className="font-normal">Why it matters to you:</span>{" "}
-                  Energy sector divided — watch your XOM position closely.
+                  Why it matters: this usually increases noise around tactical entries and exits.
                 </p>
               </div>
             </div>
@@ -516,15 +552,13 @@ export function Community() {
             </p>
             <ul className="text-[15px] text-gray-700 space-y-2 list-disc pl-5">
               <li className="leading-relaxed">
-                Your posts about dividend strategies received the most
-                engagement (avg 45 likes)
+                Your posts tied to held tickers receive the highest engagement
               </li>
               <li className="leading-relaxed">
-                Your technical analysis posts are trending — 3x more views than
-                average
+                Concise thesis updates outperform long general posts
               </li>
               <li className="leading-relaxed">
-                Community finds your earnings commentary most valuable
+                Earnings-related commentary is your strongest discussion format
               </li>
             </ul>
           </div>
@@ -553,9 +587,9 @@ export function Community() {
           )}
 
           {/* Posts List */}
-          {posts.map((post, i) => (
+          {posts.map((post) => (
             <Card
-              key={i}
+              key={post.id}
               className="hover:shadow-md transition-shadow cursor-pointer"
             >
               <CardContent className="pt-6">
@@ -619,6 +653,32 @@ export function Community() {
                     title="View post details"
                   >
                     <Eye className="w-4 h-4" />
+                  </button>
+                  <button
+                    className="flex items-center gap-1 hover:text-blue-600 transition-colors"
+                    title="Like"
+                  >
+                    <ThumbsUp className="w-4 h-4" />
+                    <span>{post.likes}</span>
+                  </button>
+                  <button
+                    className="flex items-center gap-1 hover:text-blue-600 transition-colors"
+                    title="Dislike"
+                  >
+                    <ThumbsDown className="w-4 h-4" />
+                    <span>{post.dislikes}</span>
+                  </button>
+                  <button
+                    className="flex items-center gap-1 hover:text-blue-600 transition-colors"
+                    title="Bookmark"
+                  >
+                    <Bookmark className="w-4 h-4" />
+                  </button>
+                  <button
+                    className="flex items-center gap-1 hover:text-blue-600 transition-colors"
+                    title="Repost"
+                  >
+                    <Repeat2 className="w-4 h-4" />
                   </button>
 
                   {/* Edit button - only show if user is post author */}
@@ -923,6 +983,12 @@ export function Community() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <SourcesModal
+        open={showSources}
+        loading={sourcesLoading}
+        sources={sourcesData}
+        onClose={() => setShowSources(false)}
+      />
     </div>
   );
 }

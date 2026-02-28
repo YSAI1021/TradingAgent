@@ -5,6 +5,7 @@ import { StockList } from "@/app/pages/StockList";
 import { Stock } from "@/app/pages/Stock";
 import { Thesis } from "@/app/pages/Thesis";
 import { Community } from "@/app/pages/Community";
+import { Onboarding } from "@/app/pages/Onboarding";
 
 // Protected route wrappers
 export function ProtectedDashboard() {
@@ -51,6 +52,14 @@ export function ProtectedCommunity() {
   return (
     <ProtectedRoute>
       <Community />
+    </ProtectedRoute>
+  );
+}
+
+export function ProtectedOnboarding() {
+  return (
+    <ProtectedRoute>
+      <Onboarding />
     </ProtectedRoute>
   );
 }

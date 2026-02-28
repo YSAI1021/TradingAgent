@@ -1,12 +1,12 @@
-import { createBrowserRouter } from "react-router";
+import { createBrowserRouter, redirect } from "react-router";
 import { Root } from "@/app/components/Root";
 import {
-  ProtectedDashboard,
   ProtectedPortfolio,
   ProtectedStockList,
   ProtectedStock,
   ProtectedThesis,
   ProtectedCommunity,
+  ProtectedOnboarding,
 } from "@/app/pages/ProtectedPages";
 import { Login } from "@/app/pages/Login";
 import { Signup } from "@/app/pages/Signup";
@@ -22,10 +22,14 @@ export const router = createBrowserRouter([
     Component: Signup,
   },
   {
+    path: "/onboarding",
+    Component: ProtectedOnboarding,
+  },
+  {
     path: "/",
     Component: Root,
     children: [
-      { index: true, Component: ProtectedDashboard },
+      { index: true, loader: () => redirect("/portfolio") },
       { path: "portfolio", Component: ProtectedPortfolio },
       { path: "stocks", Component: ProtectedStockList },
       { path: "stock/:symbol", Component: ProtectedStock },

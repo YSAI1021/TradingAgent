@@ -46,6 +46,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(false);
   }, []);
 
+  useEffect(() => {
+    const handleInvalidToken = () => {
+      setUser(null);
+      setToken(null);
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(USER_STORAGE_KEY);
+    };
+    window.addEventListener("auth:invalid-token", handleInvalidToken);
+    return () =>
+      window.removeEventListener("auth:invalid-token", handleInvalidToken);
+  }, []);
+
   const handleLogin = async (username: string, password: string) => {
     const response: AuthResponse = await apiLogin({ username, password });
     const { token: newToken, user: newUser } = response;

@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import 'dotenv/config'
 import db from './database.js'
+import { getAssetProxyContext, resolveMarketDataSymbol } from './assetProxy.js'
 import {
   recordActivity,
   recordLogin,
@@ -13,16 +14,95 @@ import {
   getActivityLeaderboard,
   checkAndAwardBadges,
 } from './activityHelper.js'
-import { ingestNewsForTickers } from './newsService.js'
-import { chatWithAI, extractTickers, analyzeNewsSentiment } from './aiService.js'
+
+// Node 18 compatibility for dependencies that expect a global File implementation.
+if (typeof globalThis.File === 'undefined') {
+  globalThis.File = class File {
+    constructor(parts = [], name = '', options = {}) {
+      this.parts = parts
+      this.name = name
+      this.lastModified = options.lastModified || Date.now()
+      this.type = options.type || ''
+    }
+  }
+}
+
+const { ingestNewsForTickers } = await import('./newsService.js')
+const { chatWithAI, extractTickers, analyzeNewsSentiment } = await import('./aiService.js')
 
 const app = express()
 const PORT = process.env.PORT || 3000
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production'
+const THESIS_BUCKETS = new Set(['Equities', 'Real Estate', 'Crypto'])
+const NEWS_AUTO_SYNC_TTL_MS = 30 * 60 * 1000
+const NEWS_STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000
+const newsAutoSyncState = new Map()
 
-// CORS configuration for production
+const safeParseJsonArray = (value) => {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const normalizeNewsTicker = (value) => {
+  const raw = String(value || '').trim().toUpperCase()
+  if (!raw) return ''
+  const marketSymbol = resolveMarketDataSymbol(raw)
+  const base = String(marketSymbol || raw)
+    .toUpperCase()
+    .split('-')[0]
+  const cleaned = base.replace(/[^A-Z0-9]/g, '')
+  if (/^[A-Z]{1,6}$/.test(cleaned)) return cleaned
+
+  const fallback = raw.replace(/[^A-Z0-9]/g, '')
+  return /^[A-Z]{1,6}$/.test(fallback) ? fallback : ''
+}
+
+const shouldAutoSyncNews = (ticker) => {
+  const now = Date.now()
+  const last = newsAutoSyncState.get(ticker) || 0
+  if (now - last < NEWS_AUTO_SYNC_TTL_MS) return false
+  newsAutoSyncState.set(ticker, now)
+  return true
+}
+
+// CORS configuration (supports comma-separated origins in FRONTEND_URL)
+const allowedOrigins = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+const matchesAllowedOrigin = (origin) => {
+  return allowedOrigins.some((allowedOrigin) => {
+    if (allowedOrigin === '*') return true
+    if (allowedOrigin === origin) return true
+
+    // Support simple wildcard patterns like https://*.vercel.app
+    if (allowedOrigin.includes('*')) {
+      const pattern = `^${allowedOrigin.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`
+      return new RegExp(pattern).test(origin)
+    }
+
+    return false
+  })
+}
+
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || '*',
+  origin: (origin, callback) => {
+    // Allow server-to-server requests and non-browser clients (no Origin header)
+    if (!origin) return callback(null, true)
+
+    // If no allowlist is configured, allow all origins by default
+    if (allowedOrigins.length === 0) return callback(null, true)
+
+    if (matchesAllowedOrigin(origin)) return callback(null, true)
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`))
+  },
   credentials: true,
 }
 
@@ -43,7 +123,30 @@ const authenticateToken = (req, res, next) => {
       console.error('JWT verification failed:', err.message)
       return res.status(403).json({ error: 'Invalid or expired token' })
     }
-    req.user = user
+
+    let existingUser = db
+      .prepare('SELECT id, username FROM users WHERE id = ?')
+      .get(user.id)
+
+    // Recovery path: token id may become stale if database was reset/restored,
+    // but username still exists. Remap to preserve user session continuity.
+    if (!existingUser && typeof user.username === 'string' && user.username.trim()) {
+      existingUser = db
+        .prepare('SELECT id, username FROM users WHERE username = ?')
+        .get(user.username.trim())
+      if (existingUser) {
+        console.warn(
+          `Recovered session by username mapping: token id ${user.id} -> db id ${existingUser.id} (${existingUser.username})`
+        )
+      }
+    }
+
+    if (!existingUser) {
+      console.warn('JWT user not found in database:', user.id)
+      return res.status(401).json({ error: 'User account not found. Please log in again.' })
+    }
+
+    req.user = { id: existingUser.id, username: existingUser.username }
     next()
   })
 }
@@ -236,10 +339,11 @@ app.get('/api/posts', (req, res) => {
   }
 })
 
-// Fetch news-only posts
-app.get('/api/news', (req, res) => {
+// Fetch news-only posts (auto-sync per ticker when empty/stale)
+app.get('/api/news', async (req, res) => {
   try {
-    const { stock_ticker, limit } = req.query
+    const { stock_ticker, ticker, limit } = req.query
+    const selectedTickerRaw = stock_ticker || ticker
     const limitNum = Math.min(parseInt(limit, 10) || 10, 20)
 
     let query = `
@@ -250,11 +354,30 @@ app.get('/api/news', (req, res) => {
       WHERE posts.is_news = 1
     `
 
-    if (stock_ticker) {
+    if (selectedTickerRaw) {
+      const selectedTicker = normalizeNewsTicker(selectedTickerRaw)
+      if (!selectedTicker) {
+        return res.status(400).json({ error: 'Invalid ticker' })
+      }
+
       query += ' AND posts.stock_ticker = ?'
-      const newsPosts = db
-        .prepare(query + ' ORDER BY posts.news_published_at DESC, posts.created_at DESC LIMIT ?')
-        .all(stock_ticker, limitNum)
+      const statement = db.prepare(query + ' ORDER BY posts.news_published_at DESC, posts.created_at DESC LIMIT ?')
+
+      let newsPosts = statement.all(selectedTicker, limitNum)
+      const latestPublishedAt = newsPosts[0]?.news_published_at || newsPosts[0]?.created_at
+      const latestTs = latestPublishedAt ? new Date(latestPublishedAt).getTime() : 0
+      const stale = !latestTs || Number.isNaN(latestTs) || Date.now() - latestTs > NEWS_STALE_THRESHOLD_MS
+      const needSync = newsPosts.length === 0 || stale
+
+      if (needSync && shouldAutoSyncNews(selectedTicker)) {
+        try {
+          await ingestNewsForTickers([selectedTicker])
+          newsPosts = statement.all(selectedTicker, limitNum)
+        } catch (ingestError) {
+          console.error(`Auto ingest failed for ${selectedTicker}:`, ingestError.message)
+        }
+      }
+
       return res.json(newsPosts)
     }
 
@@ -437,7 +560,7 @@ app.post('/api/posts', authenticateToken, (req, res) => {
 // Update post (requires authentication)
 app.put('/api/posts/:id', authenticateToken, (req, res) => {
   try {
-    const { title, content } = req.body
+    const { title, content, stock_ticker } = req.body
     const postId = req.params.id
 
     const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId)
@@ -451,9 +574,9 @@ app.put('/api/posts/:id', authenticateToken, (req, res) => {
     }
 
     const stmt = db.prepare(
-      'UPDATE posts SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      'UPDATE posts SET title = ?, content = ?, stock_ticker = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
     )
-    stmt.run(title, content, postId)
+    stmt.run(title, content, stock_ticker || null, postId)
 
     const updatedPost = db
       .prepare(
@@ -774,38 +897,124 @@ app.delete('/api/portfolio/transactions/:id', authenticateToken, (req, res) => {
 
 // ============== Stock Price API ==============
 
-// Get current stock price (proxy to avoid CORS issues)
+function toUnixSeconds(dateInput) {
+  return Math.floor(new Date(dateInput).getTime() / 1000)
+}
+
+function parseCloseSeries(result) {
+  const timestamps = result?.timestamp || []
+  const closes = result?.indicators?.quote?.[0]?.close || []
+  const series = []
+  for (let i = 0; i < timestamps.length; i++) {
+    if (closes[i] == null) continue
+    series.push({ timestamp: timestamps[i], close: closes[i] })
+  }
+  return series
+}
+
+async function fetchYahooChart(symbol, query) {
+  const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?${query}`)
+  if (!response.ok) {
+    throw new Error(`Yahoo chart fetch failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// Proxy chart data (frontend chart can call this and avoid CORS/reliability issues)
+app.get('/api/stock/chart/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params
+    const { marketSymbol } = getAssetProxyContext(symbol)
+    const range = req.query.range || '1mo'
+    const interval = req.query.interval || '1d'
+    const params = new URLSearchParams({
+      range: String(range),
+      interval: String(interval),
+    })
+
+    const data = await fetchYahooChart(marketSymbol, params.toString())
+    res.json(data)
+  } catch (error) {
+    console.error('Error fetching stock chart:', error)
+    res.status(500).json({ error: 'Failed to fetch stock chart' })
+  }
+})
+
+// Get current (or historical close) stock price
 app.get('/api/stock/price/:symbol', async (req, res) => {
   try {
     const { symbol } = req.params
+    const { requestedSymbol, marketSymbol, proxyUsed } = getAssetProxyContext(symbol)
+    const { date } = req.query
 
-    // Using Yahoo Finance API
-    const response = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
-    )
-
-    if (!response.ok) {
-      return res.status(response.status).json({ error: 'Failed to fetch stock price' })
-    }
-
-    const data = await response.json()
-
-    if (data.chart && data.chart.result && data.chart.result[0]) {
-      const result = data.chart.result[0]
-      const price = result.meta.regularMarketPrice
-
-      if (price) {
-        return res.json({
-          symbol,
-          price,
-          currency: result.meta.currency,
-          marketState: result.meta.marketState,
-          previousClose: result.meta.previousClose,
-        })
+    if (date) {
+      const target = new Date(String(date))
+      if (Number.isNaN(target.getTime())) {
+        return res.status(400).json({ error: 'Invalid date format' })
       }
+
+      const dayStart = new Date(target)
+      dayStart.setUTCHours(0, 0, 0, 0)
+      const dayEnd = new Date(target)
+      dayEnd.setUTCHours(23, 59, 59, 999)
+      const period1 = toUnixSeconds(new Date(dayStart.getTime() - 3 * 24 * 60 * 60 * 1000))
+      const period2 = toUnixSeconds(new Date(dayEnd.getTime() + 3 * 24 * 60 * 60 * 1000))
+
+      const params = new URLSearchParams({
+        interval: '1d',
+        period1: String(period1),
+        period2: String(period2),
+      })
+      const data = await fetchYahooChart(marketSymbol, params.toString())
+      const result = data?.chart?.result?.[0]
+      if (!result) return res.status(404).json({ error: 'Price not found' })
+
+      const series = parseCloseSeries(result)
+      const targetDateStr = dayStart.toISOString().slice(0, 10)
+      let match = series.find((p) => new Date(p.timestamp * 1000).toISOString().slice(0, 10) === targetDateStr)
+
+      if (!match) {
+        // fallback to latest close before selected date
+        match = series
+          .filter((p) => p.timestamp <= toUnixSeconds(dayEnd))
+          .sort((a, b) => b.timestamp - a.timestamp)[0]
+      }
+
+      if (!match) return res.status(404).json({ error: 'Historical price not found' })
+
+      return res.json({
+        symbol: requestedSymbol,
+        marketSymbol,
+        proxyUsed,
+        price: match.close,
+        currency: result?.meta?.currency || 'USD',
+        marketState: 'HISTORICAL',
+        previousClose: result?.meta?.previousClose || match.close,
+        requestedDate: String(date),
+        priceDate: new Date(match.timestamp * 1000).toISOString().slice(0, 10),
+      })
     }
 
-    res.status(404).json({ error: 'Price not found' })
+    const params = new URLSearchParams({
+      interval: '1d',
+      range: '1d',
+    })
+    const data = await fetchYahooChart(marketSymbol, params.toString())
+    const result = data?.chart?.result?.[0]
+    const price = result?.meta?.regularMarketPrice
+    if (!result || !price) {
+      return res.status(404).json({ error: 'Price not found' })
+    }
+
+    res.json({
+      symbol: requestedSymbol,
+      marketSymbol,
+      proxyUsed,
+      price,
+      currency: result?.meta?.currency,
+      marketState: result?.meta?.marketState,
+      previousClose: result?.meta?.previousClose,
+    })
   } catch (error) {
     console.error('Error fetching stock price:', error)
     res.status(500).json({ error: 'Server error' })
@@ -850,6 +1059,10 @@ app.get('/api/user/sharing-preferences', authenticateToken, (req, res) => {
       )
       .get(req.user.id)
 
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+
     res.json({
       share_daily_returns: Boolean(user.share_daily_returns),
       share_full_portfolio: Boolean(user.share_full_portfolio),
@@ -866,17 +1079,16 @@ app.post('/api/portfolio/snapshot', authenticateToken, (req, res) => {
     const { total_value, total_cost, daily_return, portfolio_data } = req.body
     const today = new Date().toISOString().split('T')[0]
 
-    // Delete existing snapshot for today if any
-    db.prepare('DELETE FROM daily_portfolio_snapshots WHERE user_id = ? AND snapshot_date = ?').run(
-      req.user.id,
-      today
-    )
-
-    // Insert new snapshot
+    // Upsert snapshot for today (atomic - avoids race condition with delete+insert)
     const stmt = db.prepare(`
       INSERT INTO daily_portfolio_snapshots
       (user_id, snapshot_date, total_value, total_cost, daily_return, portfolio_data)
       VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, snapshot_date) DO UPDATE SET
+        total_value = excluded.total_value,
+        total_cost = excluded.total_cost,
+        daily_return = excluded.daily_return,
+        portfolio_data = excluded.portfolio_data
     `)
 
     const result = stmt.run(
@@ -894,6 +1106,33 @@ app.post('/api/portfolio/snapshot', authenticateToken, (req, res) => {
     })
   } catch (error) {
     console.error('Error saving snapshot:', error)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Get portfolio snapshots for charting
+app.get('/api/portfolio/snapshots', authenticateToken, (req, res) => {
+  try {
+    const { days } = req.query
+    const daysNum = Math.max(1, Math.min(parseInt(days, 10) || 3650, 3650))
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - daysNum)
+    const cutoffDate = cutoff.toISOString().split('T')[0]
+
+    const snapshots = db
+      .prepare(
+        `
+      SELECT id, snapshot_date, total_value, total_cost, daily_return, portfolio_data
+      FROM daily_portfolio_snapshots
+      WHERE user_id = ? AND snapshot_date >= ?
+      ORDER BY snapshot_date ASC
+    `
+      )
+      .all(req.user.id, cutoffDate)
+
+    res.json(snapshots)
+  } catch (error) {
+    console.error('Error fetching portfolio snapshots:', error)
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -972,9 +1211,10 @@ app.post('/api/portfolio/generate-historical-snapshots', authenticateToken, asyn
 
       for (const holding of portfolio) {
         try {
+          const marketSymbol = resolveMarketDataSymbol(holding.symbol)
           // Fetch price
           const response = await fetch(
-            `https://query1.finance.yahoo.com/v8/finance/chart/${holding.symbol}?interval=1d&range=1d`
+            `https://query1.finance.yahoo.com/v8/finance/chart/${marketSymbol}?interval=1d&range=1d`
           )
           const data = await response.json()
 
@@ -1144,6 +1384,8 @@ app.get('/api/leaderboard', async (req, res) => {
 // Helper function to fetch and cache historical prices
 async function fetchHistoricalPrices(symbols, startDate, endDate) {
   for (const symbol of symbols) {
+    const marketSymbol = resolveMarketDataSymbol(symbol)
+
     // Check if we already have prices for this symbol in the date range
     const existingPrices = db
       .prepare(
@@ -1165,7 +1407,7 @@ async function fetchHistoricalPrices(symbols, startDate, endDate) {
         const range = Math.max(daysDiff + 5, 30) // Add buffer
 
         const response = await fetch(
-          `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=${range}d`
+          `https://query1.finance.yahoo.com/v8/finance/chart/${marketSymbol}?interval=1d&range=${range}d`
         )
 
         if (!response.ok) continue
@@ -1202,7 +1444,7 @@ async function fetchHistoricalPrices(symbols, startDate, endDate) {
           }
         }
       } catch (err) {
-        console.error(`Error fetching prices for ${symbol}:`, err)
+        console.error(`Error fetching prices for ${symbol} (market ${marketSymbol}):`, err)
       }
     }
   }
@@ -1572,6 +1814,499 @@ app.post('/api/user/sync-activity', authenticateToken, (req, res) => {
   }
 })
 
+// ============== Onboarding & Thesis Routes ==============
+
+app.get('/api/user/onboarding', authenticateToken, (req, res) => {
+  try {
+    const profile = db
+      .prepare(
+        `
+      SELECT investor_type, asset_types, risk_tolerance, decision_horizon, market_focus,
+             baseline_flags, investment_anchor, completed_at, updated_at
+      FROM user_onboarding_profiles
+      WHERE user_id = ?
+    `
+      )
+      .get(req.user.id)
+
+    if (!profile) {
+      return res.json({
+        investorType: '',
+        assetTypes: [],
+        riskTolerance: '',
+        decisionHorizon: '',
+        marketFocus: '',
+        baselineFlags: [],
+        investmentAnchor: '',
+        completedAt: null,
+      })
+    }
+
+    res.json({
+      investorType: profile.investor_type || '',
+      assetTypes: safeParseJsonArray(profile.asset_types),
+      riskTolerance: profile.risk_tolerance || '',
+      decisionHorizon: profile.decision_horizon || '',
+      marketFocus: profile.market_focus || '',
+      baselineFlags: safeParseJsonArray(profile.baseline_flags),
+      investmentAnchor: profile.investment_anchor || '',
+      completedAt: profile.completed_at || null,
+      updatedAt: profile.updated_at || null,
+    })
+  } catch (error) {
+    console.error('Error fetching onboarding profile:', error)
+    res.status(500).json({ error: 'Failed to fetch onboarding profile' })
+  }
+})
+
+app.put('/api/user/onboarding', authenticateToken, (req, res) => {
+  try {
+    const investorType = typeof req.body.investorType === 'string' ? req.body.investorType.trim() : ''
+    const assetTypes = Array.isArray(req.body.assetTypes)
+      ? req.body.assetTypes.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    const riskTolerance =
+      typeof req.body.riskTolerance === 'string' ? req.body.riskTolerance.trim() : ''
+    const decisionHorizon =
+      typeof req.body.decisionHorizon === 'string' ? req.body.decisionHorizon.trim() : ''
+    const marketFocus = typeof req.body.marketFocus === 'string' ? req.body.marketFocus.trim() : ''
+    const baselineFlags = Array.isArray(req.body.baselineFlags)
+      ? req.body.baselineFlags.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    const investmentAnchor =
+      typeof req.body.investmentAnchor === 'string' ? req.body.investmentAnchor.trim() : ''
+    const completedAt = typeof req.body.completedAt === 'string' ? req.body.completedAt : null
+
+    db.prepare(
+      `
+      INSERT INTO user_onboarding_profiles (
+        user_id, investor_type, asset_types, risk_tolerance, decision_horizon, market_focus,
+        baseline_flags, investment_anchor, completed_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id)
+      DO UPDATE SET
+        investor_type = excluded.investor_type,
+        asset_types = excluded.asset_types,
+        risk_tolerance = excluded.risk_tolerance,
+        decision_horizon = excluded.decision_horizon,
+        market_focus = excluded.market_focus,
+        baseline_flags = excluded.baseline_flags,
+        investment_anchor = excluded.investment_anchor,
+        completed_at = excluded.completed_at,
+        updated_at = CURRENT_TIMESTAMP
+    `
+    ).run(
+      req.user.id,
+      investorType,
+      JSON.stringify(assetTypes),
+      riskTolerance,
+      decisionHorizon,
+      marketFocus,
+      JSON.stringify(baselineFlags),
+      investmentAnchor,
+      completedAt
+    )
+
+    res.json({
+      message: 'Onboarding profile saved',
+      profile: {
+        investorType,
+        assetTypes,
+        riskTolerance,
+        decisionHorizon,
+        marketFocus,
+        baselineFlags,
+        investmentAnchor,
+        completedAt,
+      },
+    })
+  } catch (error) {
+    console.error('Error saving onboarding profile:', error)
+    res.status(500).json({ error: 'Failed to save onboarding profile' })
+  }
+})
+
+app.get('/api/thesis/equities', authenticateToken, (req, res) => {
+  try {
+    const rows = db
+      .prepare(
+        `
+      SELECT id, bucket, symbol, company, allocation, thesis, validity, created_at, updated_at
+      FROM thesis_equities
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `
+      )
+      .all(req.user.id)
+
+    res.json(rows)
+  } catch (error) {
+    console.error('Error fetching thesis equities:', error)
+    res.status(500).json({ error: 'Failed to fetch thesis equities' })
+  }
+})
+
+app.post('/api/thesis/equities', authenticateToken, (req, res) => {
+  try {
+    const bucket = typeof req.body.bucket === 'string' ? req.body.bucket.trim() : ''
+    const symbol = typeof req.body.symbol === 'string' ? req.body.symbol.trim().toUpperCase() : ''
+    const company = typeof req.body.company === 'string' ? req.body.company.trim() : ''
+    const allocation = typeof req.body.allocation === 'string' ? req.body.allocation.trim() : ''
+    const thesis = typeof req.body.thesis === 'string' ? req.body.thesis.trim() : ''
+    const validity = typeof req.body.validity === 'string' ? req.body.validity.trim() : ''
+
+    if (!THESIS_BUCKETS.has(bucket)) {
+      return res.status(400).json({ error: 'Invalid bucket' })
+    }
+    if (!symbol || !company || !allocation || !thesis || !validity) {
+      return res.status(400).json({ error: 'Missing required fields' })
+    }
+
+    const existing = db
+      .prepare(
+        `
+      SELECT id
+      FROM thesis_equities
+      WHERE user_id = ? AND bucket = ? AND symbol = ?
+    `
+      )
+      .get(req.user.id, bucket, symbol)
+
+    let rowId = existing?.id
+    if (existing) {
+      db.prepare(
+        `
+        UPDATE thesis_equities
+        SET company = ?, allocation = ?, thesis = ?, validity = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+      `
+      ).run(company, allocation, thesis, validity, existing.id, req.user.id)
+    } else {
+      const insertResult = db
+        .prepare(
+          `
+        INSERT INTO thesis_equities (user_id, bucket, symbol, company, allocation, thesis, validity)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `
+        )
+        .run(req.user.id, bucket, symbol, company, allocation, thesis, validity)
+      rowId = insertResult.lastInsertRowid
+    }
+
+    const saved = db
+      .prepare(
+        `
+      SELECT id, bucket, symbol, company, allocation, thesis, validity, created_at, updated_at
+      FROM thesis_equities
+      WHERE id = ? AND user_id = ?
+    `
+      )
+      .get(rowId, req.user.id)
+
+    res.status(201).json(saved)
+  } catch (error) {
+    console.error('Error saving thesis equity:', error)
+    if (error?.message?.includes('FOREIGN KEY constraint failed')) {
+      return res.status(401).json({ error: 'Session expired. Please log in again.' })
+    }
+    if (error?.message?.includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'This symbol already exists in the selected bucket.' })
+    }
+    res.status(500).json({ error: 'Failed to save thesis equity' })
+  }
+})
+
+app.put('/api/thesis/equities/:id', authenticateToken, (req, res) => {
+  try {
+    const rowId = parseInt(req.params.id)
+    if (!Number.isFinite(rowId)) {
+      return res.status(400).json({ error: 'Invalid thesis equity id' })
+    }
+
+    const existing = db
+      .prepare('SELECT id FROM thesis_equities WHERE id = ? AND user_id = ?')
+      .get(rowId, req.user.id)
+    if (!existing) {
+      return res.status(404).json({ error: 'Thesis equity not found' })
+    }
+
+    const bucket = typeof req.body.bucket === 'string' ? req.body.bucket.trim() : ''
+    const symbol = typeof req.body.symbol === 'string' ? req.body.symbol.trim().toUpperCase() : ''
+    const company = typeof req.body.company === 'string' ? req.body.company.trim() : ''
+    const allocation = typeof req.body.allocation === 'string' ? req.body.allocation.trim() : ''
+    const thesis = typeof req.body.thesis === 'string' ? req.body.thesis.trim() : ''
+    const validity = typeof req.body.validity === 'string' ? req.body.validity.trim() : ''
+
+    if (!THESIS_BUCKETS.has(bucket)) {
+      return res.status(400).json({ error: 'Invalid bucket' })
+    }
+    if (!symbol || !company || !allocation || !thesis || !validity) {
+      return res.status(400).json({ error: 'Missing required fields' })
+    }
+
+    db.prepare(
+      `
+      UPDATE thesis_equities
+      SET bucket = ?, symbol = ?, company = ?, allocation = ?, thesis = ?, validity = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ?
+    `
+    ).run(bucket, symbol, company, allocation, thesis, validity, rowId, req.user.id)
+
+    const updated = db
+      .prepare(
+        `
+      SELECT id, bucket, symbol, company, allocation, thesis, validity, created_at, updated_at
+      FROM thesis_equities
+      WHERE id = ? AND user_id = ?
+    `
+      )
+      .get(rowId, req.user.id)
+
+    res.json(updated)
+  } catch (error) {
+    console.error('Error updating thesis equity:', error)
+    if (error?.message?.includes('FOREIGN KEY constraint failed')) {
+      return res.status(401).json({ error: 'Session expired. Please log in again.' })
+    }
+    if (error?.message?.includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'This symbol already exists in the selected bucket.' })
+    }
+    res.status(500).json({ error: 'Failed to update thesis equity' })
+  }
+})
+
+app.delete('/api/thesis/equities/:id', authenticateToken, (req, res) => {
+  try {
+    const rowId = parseInt(req.params.id)
+    if (!Number.isFinite(rowId)) {
+      return res.status(400).json({ error: 'Invalid thesis equity id' })
+    }
+
+    const existing = db
+      .prepare('SELECT id FROM thesis_equities WHERE id = ? AND user_id = ?')
+      .get(rowId, req.user.id)
+    if (!existing) {
+      return res.status(404).json({ error: 'Thesis equity not found' })
+    }
+
+    db.prepare('DELETE FROM thesis_equities WHERE id = ? AND user_id = ?').run(rowId, req.user.id)
+    res.json({ message: 'Thesis equity deleted' })
+  } catch (error) {
+    console.error('Error deleting thesis equity:', error)
+    res.status(500).json({ error: 'Failed to delete thesis equity' })
+  }
+})
+
+// ============== Thesis Decision Events Routes ==============
+
+// GET /api/thesis/dashboard-stats — aggregated review dashboard stats (last 90 days)
+app.get('/api/thesis/dashboard-stats', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id
+
+    const since = new Date()
+    since.setDate(since.getDate() - 90)
+    const sinceStr = since.toISOString()
+
+    const counts = db
+      .prepare(
+        `SELECT event_type, COUNT(*) as cnt
+         FROM thesis_decision_events
+         WHERE user_id = ? AND created_at >= ?
+         GROUP BY event_type`
+      )
+      .all(userId, sinceStr)
+
+    const countMap = {}
+    counts.forEach((row) => {
+      countMap[row.event_type] = row.cnt
+    })
+
+    const honored = countMap['rule_honored'] || 0
+    const overrides = countMap['rule_override'] || 0
+    const panicPauses = countMap['panic_pause'] || 0
+    const totalDecisions = honored + overrides
+
+    // Average cooling-off period for panic pauses (hours between pause and next event)
+    const panicPauseEvents = db
+      .prepare(
+        `SELECT created_at FROM thesis_decision_events
+         WHERE user_id = ? AND event_type = 'panic_pause' AND created_at >= ?
+         ORDER BY created_at DESC`
+      )
+      .all(userId, sinceStr)
+
+    let avgCoolingHours = 0
+    if (panicPauseEvents.length > 0) {
+      // Estimate cooling period as average gap between panic_pause events (or 24h default)
+      if (panicPauseEvents.length >= 2) {
+        let totalGap = 0
+        for (let i = 0; i < panicPauseEvents.length - 1; i++) {
+          const gap =
+            new Date(panicPauseEvents[i].created_at).getTime() -
+            new Date(panicPauseEvents[i + 1].created_at).getTime()
+          totalGap += gap
+        }
+        avgCoolingHours = Math.round(totalGap / (panicPauseEvents.length - 1) / (1000 * 60 * 60))
+      } else {
+        avgCoolingHours = 24
+      }
+    }
+
+    res.json({
+      ruleAdherence: totalDecisions > 0 ? Math.round((honored / totalDecisions) * 100) : 0,
+      totalDecisions,
+      honored,
+      overrides,
+      panicPauses,
+      avgCoolingHours,
+    })
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error)
+    res.status(500).json({ error: 'Failed to fetch dashboard stats' })
+  }
+})
+
+// POST /api/thesis/decision-events — log a decision event
+app.post('/api/thesis/decision-events', authenticateToken, (req, res) => {
+  try {
+    const { eventType, ruleId, description } = req.body
+    const validTypes = ['rule_honored', 'rule_override', 'panic_pause']
+    if (!eventType || !validTypes.includes(eventType)) {
+      return res.status(400).json({ error: `eventType must be one of: ${validTypes.join(', ')}` })
+    }
+
+    const result = db
+      .prepare(
+        `INSERT INTO thesis_decision_events (user_id, event_type, rule_id, description)
+         VALUES (?, ?, ?, ?)`
+      )
+      .run(req.user.id, eventType, ruleId || null, description || null)
+
+    res.json({
+      id: result.lastInsertRowid,
+      eventType,
+      ruleId: ruleId || null,
+      description: description || null,
+    })
+  } catch (error) {
+    console.error('Error logging decision event:', error)
+    res.status(500).json({ error: 'Failed to log decision event' })
+  }
+})
+
+// POST /api/thesis/decision-events/seed — seed demo data for the current user
+app.post('/api/thesis/decision-events/seed', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id
+
+    // Check if user already has events
+    const existing = db
+      .prepare('SELECT COUNT(*) as cnt FROM thesis_decision_events WHERE user_id = ?')
+      .get(userId)
+
+    if (existing.cnt > 0) {
+      return res.json({ message: 'Demo data already exists', seeded: false })
+    }
+
+    const now = Date.now()
+    const DAY = 24 * 60 * 60 * 1000
+
+    const events = [
+      { type: 'rule_honored', desc: 'Held position through volatility per Rule #1', daysAgo: 2 },
+      { type: 'rule_honored', desc: 'Rebalanced tech allocation below 60% threshold', daysAgo: 5 },
+      { type: 'rule_honored', desc: 'Waited 24h before buying during VIX spike', daysAgo: 8 },
+      { type: 'rule_honored', desc: 'Trimmed concentrated position to target weight', daysAgo: 12 },
+      { type: 'rule_honored', desc: 'Logged rationale before executing trade', daysAgo: 15 },
+      { type: 'rule_honored', desc: 'Paused new buys during elevated macro risk', daysAgo: 20 },
+      { type: 'rule_honored', desc: 'Held through earnings despite pre-announcement anxiety', daysAgo: 25 },
+      { type: 'rule_honored', desc: 'Reduced correlated positions per concentration rule', daysAgo: 30 },
+      { type: 'rule_honored', desc: 'Followed stop-loss discipline on losing position', daysAgo: 35 },
+      { type: 'rule_honored', desc: 'Reviewed thesis before adding to winner', daysAgo: 40 },
+      { type: 'rule_honored', desc: 'Maintained cash buffer during drawdown', daysAgo: 50 },
+      { type: 'rule_override', desc: 'Sold high-beta position before stop trigger during sharp drawdown', daysAgo: 24 },
+      { type: 'rule_override', desc: 'Added to position during VIX > 20 despite pause rule', daysAgo: 45 },
+      { type: 'panic_pause', desc: 'Market dropped 6.2% — paused for 48h', daysAgo: 14 },
+      { type: 'panic_pause', desc: 'Flash crash scare — activated cooling-off period', daysAgo: 28 },
+      { type: 'panic_pause', desc: 'Earnings miss triggered anxiety — paused trading', daysAgo: 42 },
+      { type: 'panic_pause', desc: 'Portfolio drawdown 4% — took 24h break', daysAgo: 60 },
+    ]
+
+    const insert = db.prepare(
+      `INSERT INTO thesis_decision_events (user_id, event_type, description, created_at)
+       VALUES (?, ?, ?, ?)`
+    )
+
+    const insertMany = db.transaction((evts) => {
+      for (const evt of evts) {
+        const ts = new Date(now - evt.daysAgo * DAY).toISOString()
+        insert.run(userId, evt.type, evt.desc, ts)
+      }
+    })
+
+    insertMany(events)
+
+    res.json({ message: 'Demo data seeded', seeded: true, count: events.length })
+  } catch (error) {
+    console.error('Error seeding decision events:', error)
+    res.status(500).json({ error: 'Failed to seed decision events' })
+  }
+})
+
+// ============== AI Settings Routes ==============
+
+app.get('/api/user/settings/ai', authenticateToken, (req, res) => {
+  try {
+    const settings = db
+      .prepare(
+        `
+      SELECT gemini_api_key, updated_at
+      FROM user_ai_settings
+      WHERE user_id = ?
+    `
+      )
+      .get(req.user.id)
+
+    res.json({
+      hasGeminiApiKey: Boolean(settings?.gemini_api_key),
+      updatedAt: settings?.updated_at || null,
+    })
+  } catch (error) {
+    console.error('Error fetching AI settings:', error)
+    res.status(500).json({ error: 'Failed to fetch AI settings' })
+  }
+})
+
+app.put('/api/user/settings/ai', authenticateToken, (req, res) => {
+  try {
+    const { geminiApiKey } = req.body
+    const cleanedKey = typeof geminiApiKey === 'string' ? geminiApiKey.trim() : ''
+
+    if (!cleanedKey) {
+      return res.status(400).json({ error: 'geminiApiKey is required' })
+    }
+
+    db.prepare(
+      `
+      INSERT INTO user_ai_settings (user_id, gemini_api_key, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id)
+      DO UPDATE SET gemini_api_key = excluded.gemini_api_key, updated_at = CURRENT_TIMESTAMP
+    `
+    ).run(req.user.id, cleanedKey)
+
+    res.json({
+      message: 'AI settings updated',
+      hasGeminiApiKey: true,
+      updatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error('Error updating AI settings:', error)
+    res.status(500).json({ error: 'Failed to update AI settings' })
+  }
+})
+
 // ============== AI Chat Routes ==============
 
 // Chat with AI trading assistant
@@ -1583,11 +2318,20 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Messages array is required' })
     }
 
-    if (!apiKey) {
+    let resolvedApiKey = typeof apiKey === 'string' ? apiKey.trim() : ''
+
+    if (!resolvedApiKey) {
+      const storedSettings = db
+        .prepare('SELECT gemini_api_key FROM user_ai_settings WHERE user_id = ?')
+        .get(req.user.id)
+      resolvedApiKey = storedSettings?.gemini_api_key || ''
+    }
+
+    if (!resolvedApiKey) {
       return res.status(400).json({
         success: false,
         error: 'API key is required',
-        message: 'Please set your Gemini API key in Settings to use the AI Assistant.'
+        message: 'Please set your Gemini API key in Add Key to use the AI Assistant.'
       })
     }
 
@@ -1637,7 +2381,12 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
           if (!news.sentiment || news.sentiment === 'neutral' || news.sentiment === '') {
             try {
               console.log(`Analyzing sentiment for: ${news.title.substring(0, 40)}...`)
-              const analysis = await analyzeNewsSentiment(news.title, news.content, news.stock_ticker, apiKey)
+              const analysis = await analyzeNewsSentiment(
+                news.title,
+                news.content,
+                news.stock_ticker,
+                resolvedApiKey
+              )
 
               // Update in database
               updateSentimentStmt.run(analysis.sentiment, analysis.confidence, news.id)
@@ -1705,7 +2454,7 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
     }
 
     // Call AI service with user-provided API key
-    const result = await chatWithAI({ messages, context, apiKey })
+    const result = await chatWithAI({ messages, context, apiKey: resolvedApiKey })
 
     // Include detected tickers and news count in response for frontend
     res.json({

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fetchStockPrice } from "@/app/services/api";
 import { useAuth } from "@/app/context/AuthContext";
+import { resolveMarketDataSymbol } from "@/app/utils/assetProxy";
 
 export type StockQuote = {
   symbol: string;
@@ -22,6 +23,8 @@ async function fetchQuote(
   token?: string,
 ): Promise<StockQuote | null> {
   try {
+    const marketDataSymbol = resolveMarketDataSymbol(symbol);
+
     // Try backend API first if token is available
     if (token) {
       try {
@@ -40,7 +43,7 @@ async function fetchQuote(
 
     // Fallback to Yahoo Finance
     const corsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=5d&interval=1d`,
+      `https://query1.finance.yahoo.com/v8/finance/chart/${marketDataSymbol}?range=5d&interval=1d`,
     )}`;
     const res = await fetch(corsUrl);
     if (!res.ok) return null;

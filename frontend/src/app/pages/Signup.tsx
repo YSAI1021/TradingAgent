@@ -51,7 +51,7 @@ export function Signup() {
 
     try {
       await signup(username, email, password);
-      navigate("/");
+      navigate("/onboarding");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Signup failed");
     } finally {

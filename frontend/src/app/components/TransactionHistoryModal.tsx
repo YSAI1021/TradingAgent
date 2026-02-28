@@ -64,6 +64,7 @@ export function TransactionHistoryModal({
     try {
       await deletePortfolioTransaction(token!, transactionId);
       await loadTransactions();
+      window.dispatchEvent(new Event("portfolio:refresh"));
     } catch (err) {
       console.error("Error deleting transaction:", err);
     } finally {
@@ -71,14 +72,21 @@ export function TransactionHistoryModal({
     }
   };
 
-  const totalInvested = transactions.reduce(
-    (sum, t) => sum + t.shares * t.purchasePrice,
-    0,
-  );
-  const currentValue = transactions.reduce(
-    (sum, t) => sum + t.shares * currentPrice,
-    0,
-  );
+  // Calculate net position: buys add shares/cost, sells remove
+  let netShares = 0;
+  let totalCostBasis = 0;
+  transactions.forEach((t) => {
+    if (t.transaction_type === "buy") {
+      netShares += t.shares;
+      totalCostBasis += t.shares * t.price_per_share;
+    } else {
+      const avgCost = netShares > 0 ? totalCostBasis / netShares : 0;
+      netShares -= t.shares;
+      totalCostBasis -= t.shares * avgCost;
+    }
+  });
+  const totalInvested = totalCostBasis > 0 ? totalCostBasis : 0;
+  const currentValue = netShares * currentPrice;
   const overallGainLoss =
     totalInvested > 0
       ? ((currentValue - totalInvested) / totalInvested) * 100
@@ -106,21 +114,14 @@ export function TransactionHistoryModal({
             <>
               <div className="rounded-lg border border-gray-200 overflow-hidden">
                 <div className="grid grid-cols-7 gap-2 px-4 py-3 text-xs font-medium text-gray-500 bg-gray-50 border-b">
-                  <div>Date</div>
+                  <div className="col-span-2">Date</div>
                   <div>Type</div>
                   <div className="text-right">Shares</div>
                   <div className="text-right">Price</div>
                   <div className="text-right">Total</div>
-                  <div className="text-right">Gain/Loss %</div>
                   <div className="text-right">Action</div>
                 </div>
                 {transactions.map((txn) => {
-                  const gainLoss =
-                    txn.price_per_share > 0
-                      ? ((currentPrice - txn.price_per_share) /
-                          txn.price_per_share) *
-                        100
-                      : 0;
                   const totalCost = txn.shares * txn.price_per_share;
                   const transactionDate = new Date(txn.transaction_date);
 
@@ -129,7 +130,7 @@ export function TransactionHistoryModal({
                       key={txn.id}
                       className="grid grid-cols-7 gap-2 px-4 py-3 text-sm border-b last:border-b-0 hover:bg-gray-50 items-center"
                     >
-                      <div>{transactionDate.toLocaleDateString()}</div>
+                      <div className="col-span-2">{transactionDate.toLocaleDateString()}</div>
                       <div className="capitalize">
                         <span
                           className={`px-2 py-1 rounded text-xs font-medium ${
@@ -146,14 +147,6 @@ export function TransactionHistoryModal({
                         ${txn.price_per_share.toFixed(2)}
                       </div>
                       <div className="text-right">${totalCost.toFixed(2)}</div>
-                      <div
-                        className={`text-right font-medium ${
-                          gainLoss >= 0 ? "text-green-600" : "text-red-600"
-                        }`}
-                      >
-                        {gainLoss >= 0 ? "+" : ""}
-                        {gainLoss.toFixed(2)}%
-                      </div>
                       <div className="text-right flex justify-end">
                         <Button
                           variant="ghost"
@@ -196,32 +189,20 @@ export function TransactionHistoryModal({
                   <span className="text-gray-600">Net Current Value</span>
                   <span className="font-medium text-gray-900">
                     $
-                    {transactions
-                      .reduce((sum, t) => sum + t.shares * currentPrice, 0)
-                      .toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    {currentValue.toLocaleString("en-US", { minimumFractionDigits: 2 })}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm pt-2 border-t">
-                  <span className="text-gray-600">Total Invested</span>
+                  <span className="text-gray-600">Total Gain/Loss</span>
                   <span
                     className={`font-semibold ${
-                      transactions.reduce(
-                        (sum, t) => sum + t.shares * currentPrice,
-                        0,
-                      ) -
-                        transactions.reduce(
-                          (sum, t) => sum + t.shares * t.price_per_share,
-                          0,
-                        ) >=
-                      0
+                      currentValue - totalInvested >= 0
                         ? "text-green-600"
                         : "text-red-600"
                     }`}
                   >
-                    $
-                    {transactions
-                      .reduce((sum, t) => sum + t.shares * t.price_per_share, 0)
-                      .toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    {overallGainLoss >= 0 ? "+" : ""}
+                    {overallGainLoss.toFixed(2)}%
                   </span>
                 </div>
               </div>

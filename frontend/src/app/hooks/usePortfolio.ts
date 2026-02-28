@@ -2,6 +2,7 @@ import { useMemo, useEffect, useState } from "react";
 import { useStockQuotes } from "./useStockQuotes";
 import { useAuth } from "@/app/context/AuthContext";
 import { fetchPortfolioSummary } from "@/app/services/api";
+import { getAssetMetadata } from "@/app/utils/assetProxy";
 import { validatePortfolioData } from "@/app/utils/dataAudit";
 
 // Map of symbol to company name and sector
@@ -13,6 +14,14 @@ const SYMBOL_METADATA: Record<string, { name: string; sector: string }> = {
   META: { name: "Meta Platforms", sector: "Technology" },
   AAPL: { name: "Apple Inc.", sector: "Technology" },
   JPM: { name: "JPMorgan Chase", sector: "Finance" },
+  XOM: { name: "Exxon Mobil", sector: "Energy" },
+  UNH: { name: "UnitedHealth Group", sector: "Healthcare" },
+  AMZN: { name: "Amazon.com", sector: "Consumer Discretionary" },
+  AMD: { name: "Advanced Micro Devices", sector: "Technology" },
+  COIN: { name: "Coinbase Global", sector: "Financial Services" },
+  PLTR: { name: "Palantir Technologies", sector: "Technology" },
+  SHOP: { name: "Shopify", sector: "Technology" },
+  SQ: { name: "Block", sector: "Financial Services" },
 };
 
 export type PortfolioResult = {
@@ -42,6 +51,13 @@ export function usePortfolio() {
   >([]);
   const [portfolioLoading, setPortfolioLoading] = useState(isAuthenticated);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setRefreshNonce((prev) => prev + 1);
+    window.addEventListener("portfolio:refresh", refresh);
+    return () => window.removeEventListener("portfolio:refresh", refresh);
+  }, []);
 
   // Fetch portfolio summary from backend
   useEffect(() => {
@@ -72,7 +88,7 @@ export function usePortfolio() {
         );
       })
       .finally(() => setPortfolioLoading(false));
-  }, [isAuthenticated, token]);
+  }, [isAuthenticated, token, refreshNonce]);
 
   // Get stock quotes for the symbols in the portfolio
   const symbolsToFetch = backendHoldings.map((h) => h.symbol);
@@ -80,10 +96,7 @@ export function usePortfolio() {
 
   const result = useMemo(() => {
     const holdings: Holding[] = backendHoldings.map((h) => {
-      const metadata = SYMBOL_METADATA[h.symbol] || {
-        name: h.symbol,
-        sector: "Other",
-      };
+      const metadata = SYMBOL_METADATA[h.symbol] || getAssetMetadata(h.symbol) || { name: h.symbol, sector: "Other" };
       const currentPrice = quotes[h.symbol]?.price ?? h.averageCost;
       const value = h.shares * currentPrice;
       const changePercent = quotes[h.symbol]?.changePercent ?? 0;

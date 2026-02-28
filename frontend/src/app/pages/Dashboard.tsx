@@ -75,6 +75,7 @@ export function Dashboard() {
           what: "No holdings detected",
           why: "Add transactions to build your portfolio",
           action: "warning" as const,
+          tags: ["Add Holdings"],
         },
       ];
     }
@@ -107,12 +108,21 @@ export function Dashboard() {
       .reduce((max, h) => Math.max(max, h.allocation || 0), 0)
       .toFixed(0);
 
+    const topHoldingSymbols = [...holdings]
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 2)
+      .map((h) => h.symbol);
+
     return [
       {
         section: "Stock",
         what: stockWhat,
         why: stockWhy,
         action: topMover && (topMover.change ?? 0) > 0 ? "success" : "warning",
+        tags: [
+          ...(topMover ? [topMover.symbol] : []),
+          ...topHoldingSymbols.filter((symbol) => symbol !== topMover?.symbol),
+        ].slice(0, 3),
       },
       {
         section: "Sector",
@@ -123,12 +133,17 @@ export function Dashboard() {
           ? `Your ${topSector} holdings represent ${sectorPct}% of portfolio`
           : "No sector data",
         action: topSector && Number(sectorPct) > 50 ? "alert" : "warning",
+        tags: topSector ? [topSector, `${sectorPct}%`, "Exposure"] : ["Sector Mix"],
       },
       {
         section: "Portfolio",
         what: `Largest holding allocation: ${largestAllocation}%`,
         why: `Consider diversifying if a single holding exceeds your target allocation.`,
         action: Number(largestAllocation) > 50 ? "alert" : "success",
+        tags: [
+          ...topHoldingSymbols,
+          Number(largestAllocation) > 50 ? "Concentration Risk" : "Balanced",
+        ],
       },
     ];
   }, [holdings, totalValue, topMovers]);
@@ -139,10 +154,7 @@ export function Dashboard() {
 
   const loadSourcesForBrief = async () => {
     const tickers = Array.from(
-      new Set([
-        ...(topMovers || []).map((m: any) => m.symbol),
-        ...(topMarketMovers || []).map((m: any) => m.symbol),
-      ]),
+      new Set(holdings.map((holding) => holding.symbol)),
     )
       .filter(Boolean)
       .slice(0, 6);
@@ -282,7 +294,7 @@ export function Dashboard() {
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
                   <Settings className="w-4 h-4 mr-2" />
-                  Customize
+                  Custom
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
@@ -351,39 +363,11 @@ export function Dashboard() {
                   Why it matters: {item.why}
                 </p>
                 <div className="flex flex-wrap gap-2 mt-3">
-                  {item.action === "success" && (
-                    <>
-                      <Badge variant="secondary" className="text-xs">
-                        AAPL
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        MSFT
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        Earnings Beat
-                      </Badge>
-                    </>
-                  )}
-                  {item.action === "warning" && (
-                    <>
-                      <Badge variant="secondary" className="text-xs">
-                        XOM
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        Energy Sector
-                      </Badge>
-                    </>
-                  )}
-                  {item.action === "alert" && (
-                    <>
-                      <Badge variant="secondary" className="text-xs">
-                        Tech Holdings
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs">
-                        Diversification
-                      </Badge>
-                    </>
-                  )}
+                  {item.tags?.map((tag: string) => (
+                    <Badge key={`${item.section}-${tag}`} variant="secondary" className="text-xs">
+                      {tag}
+                    </Badge>
+                  ))}
                 </div>
               </div>
             </div>
@@ -590,7 +574,7 @@ export function Dashboard() {
                     </p>
                   </div>
                 </div>
-                <Link to="/portfolio">
+                <Link to="/thesis">
                   <Badge
                     variant="outline"
                     className="cursor-pointer bg-white/95 text-gray-900 border-gray-300 hover:bg-gray-100"

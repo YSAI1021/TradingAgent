@@ -44,6 +44,7 @@ export function AddTransactionModal({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [fetchingPrice, setFetchingPrice] = useState(false);
+  const [autoPriceHint, setAutoPriceHint] = useState("");
 
   useEffect(() => {
     if (defaultSymbol) {
@@ -55,23 +56,32 @@ export function AddTransactionModal({
     const upperValue = value.toUpperCase();
     setSymbol(upperValue);
     setError("");
+    setAutoPriceHint("");
 
     // Auto-fetch price when symbol is valid (1-5 uppercase letters)
     if (/^[A-Z]{1,5}$/.test(upperValue)) {
-      fetchPriceForSymbol(upperValue);
+      fetchPriceForSymbol(upperValue, transactionDate);
     }
   };
 
-  const fetchPriceForSymbol = async (sym: string) => {
+  const fetchPriceForSymbol = async (sym: string, date?: string) => {
     if (!sym) return;
 
     setFetchingPrice(true);
+    setAutoPriceHint("");
     try {
-      const data = await fetchStockPrice(sym, token);
+      const data = await fetchStockPrice(sym, token, date);
       if (data.price) {
         setPricePerShare(data.price.toFixed(2));
-      } else if (data.error) {
-        setError(`Could not fetch price for ${sym}. Please enter manually.`);
+        const proxyHint =
+          data.proxyUsed && data.marketSymbol
+            ? ` (via ${data.marketSymbol})`
+            : "";
+        if (date && data.priceDate) {
+          setAutoPriceHint(`Auto-filled close: ${data.priceDate}${proxyHint}`);
+        } else {
+          setAutoPriceHint(`Auto-filled latest market price${proxyHint}`);
+        }
       }
     } catch (err) {
       console.error(`Error fetching price for ${sym}:`, err);
@@ -80,6 +90,12 @@ export function AddTransactionModal({
       setFetchingPrice(false);
     }
   };
+
+  useEffect(() => {
+    if (!open) return;
+    if (!/^[A-Z]{1,5}$/.test(symbol)) return;
+    fetchPriceForSymbol(symbol, transactionDate);
+  }, [transactionDate, symbol, open]);
 
   const handleSubmit = async () => {
     setError("");
@@ -152,7 +168,7 @@ export function AddTransactionModal({
           )}
 
           <div>
-            <Label htmlFor="symbol">Stock Symbol *</Label>
+            <Label htmlFor="symbol">Symbol *</Label>
             <Input
               id="symbol"
               placeholder="e.g., AAPL"
@@ -162,6 +178,9 @@ export function AddTransactionModal({
               maxLength={5}
               disabled={!!defaultSymbol}
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Non-stock aliases supported: GOLD → GLD, REIT/REAL → VNQ, Crypto use BTC/ETH.
+            </p>
           </div>
 
           <div>
@@ -213,6 +232,9 @@ export function AddTransactionModal({
                 </div>
               )}
             </div>
+            {autoPriceHint && (
+              <p className="mt-1 text-xs text-gray-500">{autoPriceHint}</p>
+            )}
           </div>
 
           <div>
