@@ -88,6 +88,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_thesis_equities_user_bucket ON thesis_equities(user_id, bucket);
   CREATE INDEX IF NOT EXISTS idx_thesis_equities_user_symbol ON thesis_equities(user_id, symbol);
 
+  CREATE TABLE IF NOT EXISTS user_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    condition TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_user_rules_user_id ON user_rules(user_id);
+  CREATE INDEX IF NOT EXISTS idx_user_rules_created_at ON user_rules(created_at DESC);
+
   CREATE TABLE IF NOT EXISTS posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,

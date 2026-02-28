@@ -25,8 +25,8 @@ export function Navigation() {
   };
 
   const links = [
-    { to: "/portfolio", icon: Briefcase, label: "Portfolio", matchAlso: [] as string[] },
     { to: "/thesis", icon: FileText, label: "Thesis", matchAlso: [] as string[] },
+    { to: "/portfolio", icon: Briefcase, label: "Portfolio", matchAlso: [] as string[] },
   ];
 
   return (

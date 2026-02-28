@@ -348,6 +348,55 @@ export async function deleteThesisEquity(
   });
 }
 
+// ============== User Rules (Thesis) APIs ==============
+
+export type RuleCategory = "Macro" | "Earnings" | "Risk" | "Behavior";
+export type RuleStatus = "Active" | "Triggered";
+
+export interface UserRule {
+  id: number;
+  category: RuleCategory;
+  condition: string;
+  action: string;
+  status: RuleStatus;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchUserRules(token: string): Promise<UserRule[]> {
+  return apiCall<UserRule[]>("/api/user/rules", { method: "GET", token });
+}
+
+export async function createUserRule(
+  token: string,
+  data: Pick<UserRule, "condition" | "action" | "status">,
+): Promise<UserRule> {
+  return apiCall<UserRule>("/api/user/rules", {
+    method: "POST",
+    token,
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateUserRule(
+  token: string,
+  id: number,
+  data: Pick<UserRule, "condition" | "action" | "status">,
+): Promise<UserRule> {
+  return apiCall<UserRule>(`/api/user/rules/${id}`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteUserRule(token: string, id: number): Promise<{ message: string }> {
+  return apiCall<{ message: string }>(`/api/user/rules/${id}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 // ============== Thesis Decision Events APIs ==============
 
 export interface DashboardStats {
@@ -369,6 +418,26 @@ export async function fetchDashboardStats(token: string): Promise<DashboardStats
 export async function seedDecisionEvents(token: string): Promise<{ message: string; seeded: boolean }> {
   return apiCall<{ message: string; seeded: boolean }>("/api/thesis/decision-events/seed", {
     method: "POST",
+    token,
+  });
+}
+
+export interface DecisionEvent {
+  id: number;
+  event_type: "rule_honored" | "rule_override" | "panic_pause";
+  rule_id: number | null;
+  description: string | null;
+  created_at: string;
+}
+
+export async function fetchDecisionEvents(
+  token: string,
+  limit = 50,
+): Promise<DecisionEvent[]> {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  return apiCall<DecisionEvent[]>(`/api/thesis/decision-events?${params.toString()}`, {
+    method: "GET",
     token,
   });
 }

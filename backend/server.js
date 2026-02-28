@@ -38,6 +38,18 @@ const NEWS_AUTO_SYNC_TTL_MS = 30 * 60 * 1000
 const NEWS_STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000
 const newsAutoSyncState = new Map()
 
+const USER_RULE_MAX_CHARS = 200
+const USER_RULE_CATEGORIES = new Set(['Macro', 'Earnings', 'Risk', 'Behavior'])
+const USER_RULE_STATUSES = new Set(['Active', 'Triggered'])
+
+const classifyUserRuleCategory = (condition, action) => {
+  const text = `${condition} ${action}`.toLowerCase()
+  if (/earnings|guidance|quarter|q[1-4]|report/.test(text)) return 'Earnings'
+  if (/panic|emotion|discipline|override|fomo|hesitat/.test(text)) return 'Behavior'
+  if (/vix|inflation|macro|fed|rate|yield|oil|dollar/.test(text)) return 'Macro'
+  return 'Risk'
+}
+
 const safeParseJsonArray = (value) => {
   if (!value) return []
   try {
@@ -2116,7 +2128,180 @@ app.delete('/api/thesis/equities/:id', authenticateToken, (req, res) => {
   }
 })
 
+// ============== User Rules (Thesis) Routes ==============
+
+app.get('/api/user/rules', authenticateToken, (req, res) => {
+  try {
+    const rows = db
+      .prepare(
+        `
+      SELECT id, category, condition, action, status, created_at, updated_at
+      FROM user_rules
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `
+      )
+      .all(req.user.id)
+    res.json(rows)
+  } catch (error) {
+    console.error('Error fetching user rules:', error)
+    res.status(500).json({ error: 'Failed to fetch rules' })
+  }
+})
+
+app.post('/api/user/rules', authenticateToken, (req, res) => {
+  try {
+    const condition = typeof req.body.condition === 'string' ? req.body.condition.trim() : ''
+    const action = typeof req.body.action === 'string' ? req.body.action.trim() : ''
+    const status = typeof req.body.status === 'string' ? req.body.status.trim() : 'Active'
+
+    if (!condition || !action) {
+      return res.status(400).json({ error: 'condition and action are required' })
+    }
+    if (condition.length > USER_RULE_MAX_CHARS || action.length > USER_RULE_MAX_CHARS) {
+      return res
+        .status(400)
+        .json({ error: `condition and action must be <= ${USER_RULE_MAX_CHARS} characters` })
+    }
+    if (!USER_RULE_STATUSES.has(status)) {
+      return res.status(400).json({ error: `status must be one of: ${Array.from(USER_RULE_STATUSES).join(', ')}` })
+    }
+
+    const category = classifyUserRuleCategory(condition, action)
+    if (!USER_RULE_CATEGORIES.has(category)) {
+      return res.status(400).json({ error: 'Invalid category' })
+    }
+
+    const result = db
+      .prepare(
+        `
+      INSERT INTO user_rules (user_id, category, condition, action, status)
+      VALUES (?, ?, ?, ?, ?)
+    `
+      )
+      .run(req.user.id, category, condition, action, status)
+
+    const saved = db
+      .prepare(
+        `
+      SELECT id, category, condition, action, status, created_at, updated_at
+      FROM user_rules
+      WHERE id = ? AND user_id = ?
+    `
+      )
+      .get(result.lastInsertRowid, req.user.id)
+
+    res.status(201).json(saved)
+  } catch (error) {
+    console.error('Error creating user rule:', error)
+    res.status(500).json({ error: 'Failed to create rule' })
+  }
+})
+
+app.put('/api/user/rules/:id', authenticateToken, (req, res) => {
+  try {
+    const rowId = parseInt(req.params.id)
+    if (!Number.isFinite(rowId)) {
+      return res.status(400).json({ error: 'Invalid rule id' })
+    }
+
+    const existing = db
+      .prepare('SELECT id FROM user_rules WHERE id = ? AND user_id = ?')
+      .get(rowId, req.user.id)
+    if (!existing) {
+      return res.status(404).json({ error: 'Rule not found' })
+    }
+
+    const condition = typeof req.body.condition === 'string' ? req.body.condition.trim() : ''
+    const action = typeof req.body.action === 'string' ? req.body.action.trim() : ''
+    const status = typeof req.body.status === 'string' ? req.body.status.trim() : 'Active'
+
+    if (!condition || !action) {
+      return res.status(400).json({ error: 'condition and action are required' })
+    }
+    if (condition.length > USER_RULE_MAX_CHARS || action.length > USER_RULE_MAX_CHARS) {
+      return res
+        .status(400)
+        .json({ error: `condition and action must be <= ${USER_RULE_MAX_CHARS} characters` })
+    }
+    if (!USER_RULE_STATUSES.has(status)) {
+      return res.status(400).json({ error: `status must be one of: ${Array.from(USER_RULE_STATUSES).join(', ')}` })
+    }
+
+    const category = classifyUserRuleCategory(condition, action)
+
+    db.prepare(
+      `
+      UPDATE user_rules
+      SET category = ?, condition = ?, action = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ?
+    `
+    ).run(category, condition, action, status, rowId, req.user.id)
+
+    const saved = db
+      .prepare(
+        `
+      SELECT id, category, condition, action, status, created_at, updated_at
+      FROM user_rules
+      WHERE id = ? AND user_id = ?
+    `
+      )
+      .get(rowId, req.user.id)
+
+    res.json(saved)
+  } catch (error) {
+    console.error('Error updating user rule:', error)
+    res.status(500).json({ error: 'Failed to update rule' })
+  }
+})
+
+app.delete('/api/user/rules/:id', authenticateToken, (req, res) => {
+  try {
+    const rowId = parseInt(req.params.id)
+    if (!Number.isFinite(rowId)) {
+      return res.status(400).json({ error: 'Invalid rule id' })
+    }
+
+    const existing = db
+      .prepare('SELECT id FROM user_rules WHERE id = ? AND user_id = ?')
+      .get(rowId, req.user.id)
+    if (!existing) {
+      return res.status(404).json({ error: 'Rule not found' })
+    }
+
+    db.prepare('DELETE FROM user_rules WHERE id = ? AND user_id = ?').run(rowId, req.user.id)
+    res.json({ message: 'Rule deleted' })
+  } catch (error) {
+    console.error('Error deleting user rule:', error)
+    res.status(500).json({ error: 'Failed to delete rule' })
+  }
+})
+
 // ============== Thesis Decision Events Routes ==============
+
+// GET /api/thesis/decision-events — list recent decision events for the current user
+app.get('/api/thesis/decision-events', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id
+    const limitRaw = Number(req.query.limit)
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50
+
+    const rows = db
+      .prepare(
+        `SELECT id, event_type, rule_id, description, created_at
+         FROM thesis_decision_events
+         WHERE user_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`
+      )
+      .all(userId, limit)
+
+    res.json(rows)
+  } catch (error) {
+    console.error('Error fetching decision events:', error)
+    res.status(500).json({ error: 'Failed to fetch decision events' })
+  }
+})
 
 // GET /api/thesis/dashboard-stats — aggregated review dashboard stats (last 90 days)
 app.get('/api/thesis/dashboard-stats', authenticateToken, (req, res) => {

@@ -6,18 +6,26 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/app/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/app/components/ui/select";
 import { Textarea } from "@/app/components/ui/textarea";
-import { ChevronDown, ChevronUp, Plus, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router";
 import { useStockQuotes } from "@/app/hooks/useStockQuotes";
+import { usePortfolio } from "@/app/hooks/usePortfolio";
 import { useCopilot } from "@/app/context/CopilotContext";
 import { useAuth } from "@/app/context/AuthContext";
+import { Slider } from "@/app/components/ui/slider";
 import {
   createThesisEquity,
   deleteThesisEquity,
+  fetchUserRules,
   fetchDashboardStats,
+  fetchDecisionEvents,
   fetchThesisEquities,
+  createUserRule,
+  updateUserRule,
+  deleteUserRule,
   seedDecisionEvents,
   DashboardStats,
+  DecisionEvent,
   ThesisBucket,
   ThesisEquity,
   updateThesisEquity,
@@ -76,23 +84,6 @@ type EquityThesisItem = {
   thesis: string;
   validity: string;
 };
-
-const INITIAL_RULES: RuleItem[] = [
-  {
-    id: 1,
-    category: "Risk",
-    condition: "VIX > 20",
-    action: "Pause new buys for 24h and reassess",
-    status: "Active",
-  },
-  {
-    id: 2,
-    category: "Risk",
-    condition: "Single position > 25%",
-    action: "Trim to target size over next 2 sessions",
-    status: "Triggered",
-  },
-];
 
 const INITIAL_EQUITIES_BY_BUCKET: Record<BucketKey, EquityThesisItem[]> = {
   Equities: [
@@ -216,13 +207,82 @@ export function Thesis() {
   const navigate = useNavigate();
   const { token } = useAuth();
   const { sendPrompt } = useCopilot();
+  const { holdings: portfolioHoldings } = usePortfolio();
 
-  const [rules, setRules] = useState<RuleItem[]>(INITIAL_RULES);
+  const [rules, setRules] = useState<RuleItem[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesError, setRulesError] = useState("");
+  const [rulesExpanded, setRulesExpanded] = useState(true);
+
+  const activeRulesCount = useMemo(
+    () => rules.filter((r) => r.status === "Active").length,
+    [rules],
+  );
   const [newCondition, setNewCondition] = useState("");
   const [newAction, setNewAction] = useState("");
   const [conditionPreset, setConditionPreset] = useState("");
   const [actionPreset, setActionPreset] = useState("");
   const [addRuleOpen, setAddRuleOpen] = useState(false);
+  const [addRuleError, setAddRuleError] = useState("");
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
+
+  const RULE_OTHER_VALUE = "__other__";
+  const RULE_MAX_CHARS = 200;
+
+  const openEditRule = (rule: RuleItem) => {
+    setEditingRuleId(rule.id);
+    setAddRuleError("");
+
+    if (RULE_CONDITION_PRESETS.includes(rule.condition)) {
+      setConditionPreset(rule.condition);
+      setNewCondition(rule.condition);
+    } else {
+      setConditionPreset(RULE_OTHER_VALUE);
+      setNewCondition(rule.condition);
+    }
+
+    if (RULE_ACTION_PRESETS.includes(rule.action)) {
+      setActionPreset(rule.action);
+      setNewAction(rule.action);
+    } else {
+      setActionPreset(RULE_OTHER_VALUE);
+      setNewAction(rule.action);
+    }
+
+    setAddRuleOpen(true);
+  };
+
+  const askAboutRule = (rule: RuleItem) => {
+    const prompt = `Evaluate this trading rule for clarity, practicality, and risk management. Suggest a tighter version if needed.\n\nIF: ${rule.condition}\nTHEN: ${rule.action}`
+    sendPrompt(prompt, { submit: true })
+  }
+
+  const askAboutAsset = (item: EquityThesisItem) => {
+    const prompt = `Review this asset thesis and provide:\n- Key risks + what would invalidate it\n- Suggested improvements (more specific triggers/metrics)\n- Position sizing / allocation sanity check\n\nAsset: ${item.symbol} (${item.company})\nAllocation: ${item.allocation}\nValidity: ${item.validity}\nThesis: ${item.thesis}`
+    sendPrompt(prompt, { submit: true })
+  }
+
+  const askAboutDecisionEvent = (evt: DecisionEvent) => {
+    const prompt = `Evaluate this decision timeline entry for discipline and rule adherence. Provide:\n- Was this disciplined? Why/why not\n- What rule/guardrail would you add or tighten\n- A short coaching note for next time\n\nEvent Type: ${evt.event_type}\nDate: ${evt.created_at}\nDescription: ${evt.description || "—"}`
+    sendPrompt(prompt, { submit: true })
+  }
+
+  const deleteRule = async (ruleId: number) => {
+    if (!confirm("Delete this rule?")) return;
+    if (!token) return;
+    try {
+      await deleteUserRule(token, ruleId);
+      setRules((prev) => prev.filter((r) => r.id !== ruleId));
+      if (editingRuleId === ruleId) {
+        setEditingRuleId(null);
+        setAddRuleOpen(false);
+      }
+    } catch (err) {
+      // keep UI simple: surface a message in the add-rule error region if dialog is open
+      const msg = err instanceof Error ? err.message : "Failed to delete rule";
+      setAddRuleError(msg);
+    }
+  };
 
   const [selectedBucket, setSelectedBucket] = useState<BucketKey>("Equities");
   const [equitiesByBucket, setEquitiesByBucket] = useState<Record<BucketKey, EquityThesisItem[]>>(
@@ -231,11 +291,14 @@ export function Thesis() {
   const [equitiesLoading, setEquitiesLoading] = useState(false);
   const [equitySaving, setEquitySaving] = useState(false);
   const [equityError, setEquityError] = useState("");
+  const [assetsExpanded, setAssetsExpanded] = useState(true);
   const [equityDialogOpen, setEquityDialogOpen] = useState(false);
   const [equityDraft, setEquityDraft] = useState<EquityDraft>(EMPTY_EQUITY_DRAFT);
   const [timelineExpanded, setTimelineExpanded] = useState(false);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
-  const [statsLoading, setStatsLoading] = useState(false);
+  const [decisionEvents, setDecisionEvents] = useState<DecisionEvent[]>([]);
+  const [decisionEventsLoading, setDecisionEventsLoading] = useState(false);
+  const [decisionEventsError, setDecisionEventsError] = useState("");
 
   const thesisSymbols = useMemo(
     () =>
@@ -261,6 +324,41 @@ export function Thesis() {
     });
     return Array.from(merged.values()).sort((a, b) => a.symbol.localeCompare(b.symbol));
   }, [selectedBucket, selectedEquities]);
+
+  const selectedDraftSymbol = equityDraft.symbol.trim().toUpperCase();
+  const draftHolding = useMemo(
+    () => portfolioHoldings.find((h) => h.symbol === selectedDraftSymbol),
+    [portfolioHoldings, selectedDraftSymbol],
+  );
+  const draftPrice = draftHolding?.currentPrice ?? quotes[selectedDraftSymbol]?.price ?? null;
+  const draftAllocationPct = draftHolding?.allocation ?? null;
+
+  const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+  const addMonths = (base: Date, months: number) =>
+    new Date(base.getFullYear(), base.getMonth() + months, base.getDate());
+  const formatDate = (d: Date) =>
+    d.toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
+  const parseMonthsFromValidity = (value: string) => {
+    const raw = String(value || "").trim();
+    const mo = raw.match(/(\d+)\s*mo/i);
+    if (mo) return clamp(parseInt(mo[1], 10) || 6, 1, 36);
+    const ts = Date.parse(raw);
+    if (!Number.isNaN(ts)) {
+      const now = new Date();
+      const end = new Date(ts);
+      const months =
+        (end.getFullYear() - now.getFullYear()) * 12 + (end.getMonth() - now.getMonth());
+      return clamp(months || 6, 1, 36);
+    }
+    return 6;
+  };
+
+  const [expiryMonths, setExpiryMonths] = useState<number>(6);
+  useEffect(() => {
+    if (!equityDialogOpen) return;
+    setExpiryMonths(parseMonthsFromValidity(equityDraft.validity));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equityDialogOpen, equityDraft.id]);
 
   const reviewCards = useMemo(() => {
     const s = dashboardStats;
@@ -298,7 +396,6 @@ export function Thesis() {
     let mounted = true;
 
     const loadStats = async () => {
-      setStatsLoading(true);
       try {
         // Seed demo data on first visit (no-op if already seeded)
         await seedDecisionEvents(token).catch(() => {});
@@ -317,13 +414,73 @@ export function Thesis() {
             avgCoolingHours: 0,
           });
         }
-      } finally {
-        if (mounted) setStatsLoading(false);
       }
     };
 
     void loadStats();
     return () => { mounted = false; };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !timelineExpanded) return;
+    let mounted = true;
+
+    const loadEvents = async () => {
+      setDecisionEventsLoading(true);
+      setDecisionEventsError("");
+      try {
+        const rows = await fetchDecisionEvents(token, 50);
+        if (!mounted) return;
+        setDecisionEvents(rows || []);
+      } catch (err) {
+        if (!mounted) return;
+        setDecisionEventsError(err instanceof Error ? err.message : "Failed to load decision events");
+        setDecisionEvents([]);
+      } finally {
+        if (mounted) setDecisionEventsLoading(false);
+      }
+    };
+
+    void loadEvents();
+    return () => {
+      mounted = false;
+    };
+  }, [token, timelineExpanded]);
+
+  useEffect(() => {
+    if (!token) {
+      setRules([]);
+      setRulesError("");
+      return;
+    }
+    let mounted = true;
+    const loadRules = async () => {
+      setRulesLoading(true);
+      setRulesError("");
+      try {
+        const rows = await fetchUserRules(token);
+        if (!mounted) return;
+        setRules(
+          (rows || []).map((r) => ({
+            id: r.id,
+            category: classifyRuleCategory(r.condition, r.action),
+            condition: r.condition,
+            action: r.action,
+            status: r.status,
+          })),
+        );
+      } catch (err) {
+        if (!mounted) return;
+        setRulesError(err instanceof Error ? err.message : "Failed to load rules");
+        setRules([]);
+      } finally {
+        if (mounted) setRulesLoading(false);
+      }
+    };
+    void loadRules();
+    return () => {
+      mounted = false;
+    };
   }, [token]);
 
   useEffect(() => {
@@ -383,25 +540,71 @@ export function Thesis() {
     }
   }, [location.search, navigate]);
 
-  const addRule = () => {
+  const [ruleSaving, setRuleSaving] = useState(false);
+
+  const addRule = async () => {
     const condition = newCondition.trim();
     const action = newAction.trim();
-    if (!condition || !action) return;
+    if (!conditionPreset || !actionPreset || !condition || !action) {
+      setAddRuleError("Please select both a condition and an action.");
+      return;
+    }
+    if (condition.length > RULE_MAX_CHARS || action.length > RULE_MAX_CHARS) {
+      setAddRuleError(`Keep each field under ${RULE_MAX_CHARS} characters.`);
+      return;
+    }
+    if (!token) {
+      setAddRuleError("Please log in to save rules.");
+      return;
+    }
 
-    setRules((prev) => [
-      {
-        id: Date.now(),
-        category: classifyRuleCategory(condition, action),
-        condition,
-        action,
-        status: "Active",
-      },
-      ...prev,
-    ]);
+    setRuleSaving(true);
+    setAddRuleError("");
+    try {
+      if (editingRuleId != null) {
+        const saved = await updateUserRule(token, editingRuleId, {
+          condition,
+          action,
+          status: "Active",
+        });
+        setRules((prev) =>
+          prev.map((r) =>
+            r.id === editingRuleId
+              ? {
+                  ...r,
+                  category: classifyRuleCategory(saved.condition, saved.action),
+                  condition: saved.condition,
+                  action: saved.action,
+                  status: saved.status,
+                }
+              : r,
+          ),
+        );
+      } else {
+        const saved = await createUserRule(token, { condition, action, status: "Active" });
+        setRules((prev) => [
+          {
+            id: saved.id,
+            category: classifyRuleCategory(saved.condition, saved.action),
+            condition: saved.condition,
+            action: saved.action,
+            status: saved.status,
+          },
+          ...prev,
+        ]);
+      }
+    } catch (err) {
+      setAddRuleError(err instanceof Error ? err.message : "Failed to save rule");
+      return;
+    } finally {
+      setRuleSaving(false);
+    }
     setNewCondition("");
     setNewAction("");
     setConditionPreset("");
     setActionPreset("");
+    setAddRuleError("");
+    setEditingRuleId(null);
     setAddRuleOpen(false);
   };
 
@@ -410,6 +613,10 @@ export function Thesis() {
     if (!open) {
       setConditionPreset("");
       setActionPreset("");
+      setNewCondition("");
+      setNewAction("");
+      setAddRuleError("");
+      setEditingRuleId(null);
     }
   };
 
@@ -535,63 +742,113 @@ export function Thesis() {
     }
   };
 
-  const timelineItems = [
-    {
-      date: "Feb 14, 2026",
-      title: "Market dropped 6.2% and Rule #1 triggered",
-      detail: "You paused for 48 hours and avoided emotional selling. Position recovered 4% next week.",
-    },
-    {
-      date: "Feb 03, 2026",
-      title: "Override detected on high-beta name",
-      detail: "You sold before your stop condition. This was followed by a rebound that invalidated the exit.",
-    },
-    {
-      date: "Jan 15, 2026",
-      title: "Concentration alert fired",
-      detail: "You moved from 28% to 24% in a single position and returned to policy range.",
-    },
-  ];
+  const disciplinedOverall =
+    dashboardStats != null &&
+    dashboardStats.totalDecisions >= 5 &&
+    dashboardStats.ruleAdherence >= 80;
+
+  const formatTimelineDate = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
+
+  const splitTitleDetail = (desc: string | null) => {
+    const raw = (desc || "").trim();
+    if (!raw) return { title: "Decision event", detail: "—" };
+    const parts = raw.split("—").map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= 2) return { title: parts[0], detail: parts.slice(1).join(" — ") };
+    return { title: raw.length > 70 ? `${raw.slice(0, 70)}…` : raw, detail: raw };
+  };
+
+  const eventTypeLabel = (t: DecisionEvent["event_type"]) => {
+    if (t === "rule_honored") return "Rule followed";
+    if (t === "rule_override") return "Rule overridden";
+    return "Panic pause";
+  };
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-6">
-      <Card className="border-blue-200 bg-blue-50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-blue-900">
-            <Sparkles className="w-5 h-5" />
-            Review Dashboard
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
-            {reviewCards.map((card) => (
-              <button
-                key={card.title}
-                type="button"
-                className="rounded-lg border border-blue-200 bg-white p-4 text-left hover:border-blue-400 hover:shadow-sm transition-all cursor-pointer"
-                onClick={() => sendPrompt(card.prompt, { submit: true })}
-              >
-                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">{card.title}</p>
-                <p className="mt-2 text-3xl font-semibold text-gray-900">{card.value}</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {reviewCards.map((card) => (
+          <button
+            key={card.title}
+            type="button"
+            className="text-left w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl"
+            onClick={() => sendPrompt(card.prompt, { submit: true })}
+          >
+            <Card className="h-full hover:shadow-sm transition-shadow">
+              <CardContent className="pt-5">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">{card.title}</p>
+                <p className="mt-2 text-2xl font-semibold text-gray-900">{card.value}</p>
                 <p className="mt-1 text-sm text-gray-600">{card.subtitle}</p>
-                <p className="mt-3 text-xs text-blue-600 font-medium">Click to ask Copilot</p>
-              </button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+                <p className="mt-3 text-xs text-blue-600 font-medium">Ask</p>
+              </CardContent>
+            </Card>
+          </button>
+        ))}
+      </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Active Rules</span>
-            <Button size="sm" onClick={() => setAddRuleOpen(true)}>
-              <Plus className="w-4 h-4 mr-1" />
-              Add Rule
-            </Button>
-          </CardTitle>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle>Rules</CardTitle>
+              <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    rulesLoading ? "bg-gray-300" : activeRulesCount > 0 ? "bg-green-500" : "bg-gray-300"
+                  }`}
+                />
+                <span>
+                  {rulesLoading
+                    ? "Loading…"
+                    : `${activeRulesCount} rule${activeRulesCount === 1 ? "" : "s"} active`}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setEditingRuleId(null);
+                  setConditionPreset("");
+                  setActionPreset("");
+                  setNewCondition("");
+                  setNewAction("");
+                  setAddRuleError("");
+                  setAddRuleOpen(true);
+                }}
+              >
+                <Plus className="w-4 h-4 mr-1" />
+                Add Rule
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-9 px-2 text-xs"
+                onClick={() => setRulesExpanded((v) => !v)}
+              >
+                {rulesExpanded ? (
+                  <>
+                    Collapse
+                    <ChevronUp className="w-4 h-4 ml-1" />
+                  </>
+                ) : (
+                  <>
+                    Expand
+                    <ChevronDown className="w-4 h-4 ml-1" />
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent className="space-y-2">
+        {rulesExpanded ? <CardContent className="space-y-2">
+          {rulesError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {rulesError}
+            </div>
+          ) : null}
+          {rulesLoading ? <p className="text-sm text-gray-500">Loading rules...</p> : null}
           {rules.map((rule) => (
             <div
               key={rule.id}
@@ -602,32 +859,85 @@ export function Thesis() {
                   IF <span className="text-blue-700">{rule.condition}</span> THEN{" "}
                   <span className="text-gray-700">{rule.action}</span>
                 </p>
-                <p className="text-xs text-gray-500 mt-1">Category: {rule.category}</p>
               </div>
-              <Badge
-                className={
-                  rule.status === "Triggered"
-                    ? "bg-amber-100 text-amber-800 border-0"
-                    : "bg-green-100 text-green-800 border-0"
-                }
-              >
-                {rule.status}
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-blue-600 hover:text-blue-700"
+                  onClick={() => askAboutRule(rule)}
+                  title="Ask Copilot"
+                >
+                  Ask
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => openEditRule(rule)}
+                  title="Edit rule"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-red-600 hover:text-red-700"
+                  onClick={() => deleteRule(rule.id)}
+                  title="Delete rule"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+                <Badge
+                  className={
+                    rule.status === "Triggered"
+                      ? "bg-amber-100 text-amber-800 border-0"
+                      : "bg-green-100 text-green-800 border-0"
+                  }
+                >
+                  {rule.status}
+                </Badge>
+              </div>
             </div>
           ))}
-        </CardContent>
+        </CardContent> : null}
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Equities</span>
-            <Button size="sm" onClick={openNewEquityDialog}>
-              <Plus className="w-4 h-4 mr-1" />
-              Add
-            </Button>
-          </CardTitle>
+          <div className="flex items-center justify-between gap-4">
+            <CardTitle>Assets</CardTitle>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={openNewEquityDialog}>
+                <Plus className="w-4 h-4 mr-1" />
+                Add
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-9 px-2 text-xs"
+                onClick={() => setAssetsExpanded((v) => !v)}
+              >
+                {assetsExpanded ? (
+                  <>
+                    Collapse
+                    <ChevronUp className="w-4 h-4 ml-1" />
+                  </>
+                ) : (
+                  <>
+                    Expand
+                    <ChevronDown className="w-4 h-4 ml-1" />
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
+        {assetsExpanded ? (
         <CardContent className="space-y-4">
           {equityError && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -672,6 +982,14 @@ export function Thesis() {
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <p className="text-xs text-gray-500">Validity: {item.validity}</p>
                   <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => askAboutAsset(item)}
+                    >
+                      Ask
+                    </Button>
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openEditEquityDialog(item)}>
                       Edit
                     </Button>
@@ -690,12 +1008,26 @@ export function Thesis() {
             ))}
           </div>
         </CardContent>
+        ) : null}
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Decision Timeline</span>
+          <CardTitle className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span>Decision Timeline</span>
+              {dashboardStats ? (
+                <Badge
+                  className={
+                    disciplinedOverall
+                      ? "bg-emerald-100 text-emerald-800 border-0"
+                      : "bg-gray-100 text-gray-700 border-0"
+                  }
+                >
+                  {disciplinedOverall ? "Disciplined" : "Building discipline"}
+                </Badge>
+              ) : null}
+            </div>
             <Button variant="ghost" size="sm" onClick={() => setTimelineExpanded((prev) => !prev)}>
               {timelineExpanded ? (
                 <>
@@ -713,19 +1045,68 @@ export function Thesis() {
         </CardHeader>
         {timelineExpanded && (
           <CardContent className="space-y-4">
-            <div className="relative pl-6">
-              <div className="absolute left-2 top-2 bottom-2 w-px bg-gray-200" />
-              {timelineItems.map((item) => (
-                <div key={item.date} className="relative pb-4 last:pb-0">
-                  <div className="absolute -left-[22px] top-2 h-3 w-3 rounded-full border-2 border-blue-600 bg-white" />
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{item.date}</p>
-                    <p className="text-sm font-medium text-gray-900 mt-1">{item.title}</p>
-                    <p className="text-sm text-gray-700 mt-1">{item.detail}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {decisionEventsError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {decisionEventsError}
+              </div>
+            ) : null}
+
+            {decisionEventsLoading ? (
+              <p className="text-sm text-gray-500">Loading timeline…</p>
+            ) : decisionEvents.length === 0 ? (
+              <p className="text-sm text-gray-500">No decision events yet.</p>
+            ) : (
+              <div className="relative pl-7">
+                <div className="absolute left-3 top-2 bottom-2 w-px bg-gray-200" />
+                {decisionEvents.map((evt) => {
+                  const isDisciplined = evt.event_type !== "rule_override";
+                  const { title, detail } = splitTitleDetail(evt.description);
+                  return (
+                    <div key={evt.id} className="relative pb-5 last:pb-0">
+                      <div
+                        className={`absolute -left-[2px] top-3 h-3 w-3 rounded-full border-2 ${
+                          isDisciplined ? "border-emerald-600" : "border-amber-600"
+                        } bg-white`}
+                      />
+                      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                          {formatTimelineDate(evt.created_at)}
+                        </p>
+                        <p className="mt-2 text-base font-semibold text-gray-900">{title}</p>
+                        <p className="mt-1 text-sm text-gray-600">{detail}</p>
+
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge
+                              className={
+                                isDisciplined
+                                  ? "bg-emerald-100 text-emerald-800 border-0"
+                                  : "bg-amber-100 text-amber-800 border-0"
+                              }
+                            >
+                              {isDisciplined ? "Disciplined" : "Undisciplined"}
+                            </Badge>
+                            <Badge className="bg-gray-100 text-gray-700 border-0">
+                              {eventTypeLabel(evt.event_type)}
+                            </Badge>
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 px-3 text-xs"
+                            onClick={() => askAboutDecisionEvent(evt)}
+                          >
+                            Ask
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </CardContent>
         )}
       </Card>
@@ -733,16 +1114,21 @@ export function Thesis() {
       <Dialog open={addRuleOpen} onOpenChange={handleAddRuleDialogChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add Rule</DialogTitle>
+            <DialogTitle>{editingRuleId != null ? "Edit Rule" : "Add Rule"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
-              <p className="text-xs text-gray-600 mb-1">Guided IF condition (optional)</p>
+              <p className="text-xs text-gray-600 mb-1">Guided IF condition</p>
               <Select
                 value={conditionPreset || undefined}
                 onValueChange={(value) => {
                   setConditionPreset(value);
-                  setNewCondition(value);
+                  setAddRuleError("");
+                  if (value === RULE_OTHER_VALUE) {
+                    setNewCondition("");
+                  } else {
+                    setNewCondition(value);
+                  }
                 }}
               >
                 <SelectTrigger>
@@ -754,16 +1140,35 @@ export function Thesis() {
                       {preset}
                     </SelectItem>
                   ))}
+                  <SelectItem value={RULE_OTHER_VALUE}>Other…</SelectItem>
                 </SelectContent>
               </Select>
+              {conditionPreset === RULE_OTHER_VALUE ? (
+                <div className="mt-2 space-y-1">
+                  <Input
+                    placeholder={`Write a short condition (max ${RULE_MAX_CHARS} chars)`}
+                    value={newCondition}
+                    maxLength={RULE_MAX_CHARS}
+                    onChange={(e) => setNewCondition(e.target.value)}
+                  />
+                  <p className="text-xs text-gray-500">
+                    {newCondition.length}/{RULE_MAX_CHARS}
+                  </p>
+                </div>
+              ) : null}
             </div>
             <div>
-              <p className="text-xs text-gray-600 mb-1">Guided THEN action (optional)</p>
+              <p className="text-xs text-gray-600 mb-1">Guided THEN action</p>
               <Select
                 value={actionPreset || undefined}
                 onValueChange={(value) => {
                   setActionPreset(value);
-                  setNewAction(value);
+                  setAddRuleError("");
+                  if (value === RULE_OTHER_VALUE) {
+                    setNewAction("");
+                  } else {
+                    setNewAction(value);
+                  }
                 }}
               >
                 <SelectTrigger>
@@ -775,74 +1180,166 @@ export function Thesis() {
                       {preset}
                     </SelectItem>
                   ))}
+                  <SelectItem value={RULE_OTHER_VALUE}>Other…</SelectItem>
                 </SelectContent>
               </Select>
+              {actionPreset === RULE_OTHER_VALUE ? (
+                <div className="mt-2 space-y-1">
+                  <Input
+                    placeholder={`Write a short action (max ${RULE_MAX_CHARS} chars)`}
+                    value={newAction}
+                    maxLength={RULE_MAX_CHARS}
+                    onChange={(e) => setNewAction(e.target.value)}
+                  />
+                  <p className="text-xs text-gray-500">
+                    {newAction.length}/{RULE_MAX_CHARS}
+                  </p>
+                </div>
+              ) : null}
             </div>
-            <Input
-              placeholder="IF condition"
-              value={newCondition}
-              onChange={(e) => setNewCondition(e.target.value)}
-            />
-            <Input
-              placeholder="THEN action"
-              value={newAction}
-              onChange={(e) => setNewAction(e.target.value)}
-            />
-            <p className="text-xs text-gray-500">Category is auto-classified from your condition and action.</p>
+            {addRuleError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {addRuleError}
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddRuleOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={addRule}>Save Rule</Button>
+            <Button
+              onClick={addRule}
+              disabled={
+                ruleSaving ||
+                !conditionPreset ||
+                !actionPreset ||
+                !newCondition.trim() ||
+                !newAction.trim() ||
+                newCondition.trim().length > RULE_MAX_CHARS ||
+                newAction.trim().length > RULE_MAX_CHARS
+              }
+            >
+              {ruleSaving ? "Saving..." : "Save Rule"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={equityDialogOpen} onOpenChange={setEquityDialogOpen}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{equityDraft.id == null ? "Add Equity Thesis" : "Edit Equity Thesis"}</DialogTitle>
+        <DialogContent className="!w-[calc(100vw-2rem)] !max-w-[1000px] gap-6 rounded-2xl p-10 shadow-2xl">
+          <DialogHeader className="space-y-1">
+            <DialogTitle>
+              {equityDraft.id == null
+                ? selectedDraftSymbol
+                  ? `Add ${selectedDraftSymbol} Thesis`
+                  : "Add Thesis"
+                : selectedDraftSymbol
+                  ? `Edit ${selectedDraftSymbol} Thesis`
+                  : "Edit Thesis"}
+            </DialogTitle>
+            {selectedDraftSymbol ? (
+              <p className="text-sm text-gray-500">
+                Editing: {equityDraft.company?.trim() || selectedDraftSymbol}{" "}
+                <span className="text-green-600 font-medium">
+                  · Current Price:{" "}
+                  {draftPrice != null
+                    ? `$${draftPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    : "—"}
+                </span>
+              </p>
+            ) : null}
           </DialogHeader>
-          <div className="grid gap-3 py-2">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Input
-                placeholder="Symbol"
-                list="thesis-symbol-options"
-                value={equityDraft.symbol}
-                onChange={(e) => handleEquitySymbolChange(e.target.value)}
-              />
-              <datalist id="thesis-symbol-options">
-                {symbolSuggestions.map((item) => (
-                  <option key={item.symbol} value={item.symbol} label={`${item.symbol} - ${item.company}`} />
-                ))}
-              </datalist>
-              <Input
-                placeholder="Company"
-                value={equityDraft.company}
-                onChange={(e) => setEquityDraft((prev) => ({ ...prev, company: e.target.value }))}
-                className="sm:col-span-2"
+
+          <div className="grid gap-8 py-4 lg:grid-cols-2">
+            {/* Left: Investment Conviction */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                Investment Conviction
+              </p>
+              <Textarea
+                placeholder="Core strategic thesis"
+                value={equityDraft.thesis}
+                onChange={(e) => setEquityDraft((prev) => ({ ...prev, thesis: e.target.value }))}
+                className="min-h-[320px] text-base leading-relaxed"
               />
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Input
-                placeholder="Allocation (e.g. 12%)"
-                value={equityDraft.allocation}
-                onChange={(e) => setEquityDraft((prev) => ({ ...prev, allocation: e.target.value }))}
-              />
-              <Input
-                placeholder="Validity (e.g. 6 MO left)"
-                value={equityDraft.validity}
-                onChange={(e) => setEquityDraft((prev) => ({ ...prev, validity: e.target.value }))}
-              />
+
+            {/* Right: Details */}
+            <div className="space-y-6">
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Asset</p>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Select
+                    value={equityDraft.symbol || undefined}
+                    onValueChange={(value) => handleEquitySymbolChange(value)}
+                    disabled={equityDraft.id != null}
+                  >
+                    <SelectTrigger className="sm:col-span-1 h-12 text-base">
+                      <SelectValue placeholder="Symbol" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {symbolSuggestions.map((item) => (
+                        <SelectItem key={item.symbol} value={item.symbol}>
+                          {item.symbol}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    placeholder="Company"
+                    value={equityDraft.company}
+                    onChange={(e) => setEquityDraft((prev) => ({ ...prev, company: e.target.value }))}
+                    className="sm:col-span-2 h-12 text-base"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Target Allocation</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    placeholder="Target %"
+                    value={equityDraft.allocation}
+                    onChange={(e) => setEquityDraft((prev) => ({ ...prev, allocation: e.target.value }))}
+                    className="h-12 text-base"
+                  />
+                  <Input
+                    placeholder="Current %"
+                    value={draftAllocationPct != null ? `${draftAllocationPct.toFixed(1)}%` : "—"}
+                    disabled
+                    className="h-12 text-base"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                  Thesis Timeline &amp; Expiry
+                </p>
+                <div className="space-y-3">
+                  <Slider
+                    min={1}
+                    max={36}
+                    step={1}
+                    value={[expiryMonths]}
+                    onValueChange={(v) => {
+                      const m = clamp(v?.[0] ?? 6, 1, 36);
+                      setExpiryMonths(m);
+                      const until = addMonths(new Date(), m);
+                      setEquityDraft((prev) => ({ ...prev, validity: formatDate(until) }));
+                    }}
+                  />
+                  <p className="text-sm font-semibold text-blue-600">
+                    Logic Valid Until:{" "}
+                    {equityDraft.validity?.trim()
+                      ? equityDraft.validity
+                      : formatDate(addMonths(new Date(), expiryMonths))}
+                  </p>
+                </div>
+              </div>
             </div>
-            <Textarea
-              placeholder="Core strategic thesis"
-              value={equityDraft.thesis}
-              onChange={(e) => setEquityDraft((prev) => ({ ...prev, thesis: e.target.value }))}
-              className="min-h-[120px]"
-            />
           </div>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setEquityDialogOpen(false)}>
               Cancel
