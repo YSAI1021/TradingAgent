@@ -178,9 +178,7 @@ export function AddTransactionModal({
               maxLength={5}
               disabled={!!defaultSymbol}
             />
-            <p className="mt-1 text-xs text-gray-500">
-              Non-stock aliases supported: GOLD → GLD, REIT/REAL → VNQ, Crypto use BTC/ETH.
-            </p>
+            {/* informational alias text removed per request */}
           </div>
 
           <div>

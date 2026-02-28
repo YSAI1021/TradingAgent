@@ -29,11 +29,12 @@ async function fetchQuote(
     if (token) {
       try {
         const stockPrice = await fetchStockPrice(symbol, token);
-        const change = stockPrice.price - stockPrice.previousClose;
-        const changePercent = stockPrice.previousClose
-          ? (change / stockPrice.previousClose) * 100
-          : 0;
-        return { symbol, price: stockPrice.price, change, changePercent };
+        // Only use backend result if previousClose is valid — otherwise fall through to Yahoo
+        if (stockPrice.price && stockPrice.previousClose) {
+          const change = stockPrice.price - stockPrice.previousClose;
+          const changePercent = (change / stockPrice.previousClose) * 100;
+          return { symbol, price: stockPrice.price, change, changePercent };
+        }
       } catch (error) {
         console.debug(
           `Backend API failed for ${symbol}, falling back to Yahoo Finance`,
