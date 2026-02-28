@@ -66,9 +66,6 @@ export function Signup() {
           <CardTitle className="text-2xl font-bold text-center">
             Create Account
           </CardTitle>
-          <p className="text-center text-gray-500 text-sm">
-            Join the trading community
-          </p>
         </CardHeader>
 
         <CardContent>

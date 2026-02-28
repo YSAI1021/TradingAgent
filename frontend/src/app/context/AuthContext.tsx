@@ -59,7 +59,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const handleLogin = async (username: string, password: string) => {
-    const response: AuthResponse = await apiLogin({ username, password });
+    const normalized = username.trim().toLowerCase();
+    const response: AuthResponse = await apiLogin({
+      username: normalized,
+      password,
+    });
     const { token: newToken, user: newUser } = response;
 
     setToken(newToken);
@@ -73,9 +77,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string,
   ) => {
+    const normalized = username.trim().toLowerCase();
     const response: AuthResponse = await apiSignup({
-      username,
-      email,
+      username: normalized,
+      email: email.trim(),
       password,
     });
     const { token: newToken, user: newUser } = response;
@@ -119,7 +124,9 @@ export function useAuth() {
     // NOTE: Returning a fallback preserves runtime stability but you may
     // still want to ensure `AuthProvider` wraps the app.
     // eslint-disable-next-line no-console
-    console.warn("useAuth called outside AuthProvider; returning fallback auth context");
+    console.warn(
+      "useAuth called outside AuthProvider; returning fallback auth context",
+    );
     return {
       user: null,
       token: null,
