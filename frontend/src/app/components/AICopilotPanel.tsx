@@ -272,7 +272,7 @@ export function AICopilotPanel() {
             Add Key
           </Button>
         </div>
-        <p className="text-xs text-gray-500 mt-1">AI briefings grounded in your holdings and news context</p>
+        <p className="text-xs text-gray-500 mt-1">AI briefings grounded in your portfolio holdings and investment theses.</p>
         {!hasApiKey && (
           <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
             <p className="text-xs text-amber-800">
@@ -445,7 +445,7 @@ export function AICopilotPanel() {
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setApiKeyDraft(e.target.value)}
             />
             <p className="text-xs text-gray-500">
-              This key is used for Portfolio Copilot analysis and evidence-backed responses.
+              This key is strictly used for Portfolio Copilot analysis and is not exposed in any scenario.
             </p>
           </div>
           <div className="flex items-center justify-end gap-2">

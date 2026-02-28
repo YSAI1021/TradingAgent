@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import {
   AlertTriangle,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   LineChart,
   ResponsiveContainer,
   Tooltip,
+  Treemap,
   XAxis,
   YAxis,
 } from "recharts";
@@ -154,6 +156,7 @@ export function Portfolio() {
   const [showSources, setShowSources] = useState(false);
   const [toolboxCollapsed, setToolboxCollapsed] = useState(false);
   const [showAllocation, setShowAllocation] = useState(false);
+  const [showMap, setShowMap] = useState(false);
   const [newsCollapsed, setNewsCollapsed] = useState(false);
   const [alertsCollapsed, setAlertsCollapsed] = useState(false);
   const [holdingsFilter, setHoldingsFilter] = useState("");
@@ -369,6 +372,72 @@ export function Portfolio() {
     [holdings],
   );
 
+  const { quotes: holdingsQuotes } = useStockQuotes(holdingSymbols);
+
+  // useNavigate at component level — safe, no hook violations
+  const navigate = useNavigate();
+
+  // Recharts Treemap spreads data fields directly as props (not inside payload)
+  function CustomizedTreemapContent({ x, y, width, height, name, symbol, changePercent, allocation, value }: any) {
+    const change = typeof changePercent === "number" ? changePercent : 0;
+    const fill = change > 0 ? "#10b981" : change < 0 ? "#ef4444" : "#9ca3af";
+    const cx = x + width / 2;
+    const cy = y + height / 2;
+    const base = Math.min(width, height);
+    // Company name font: scales with tile, capped
+    const nameFontSize = Math.max(10, Math.min(36, Math.floor(base * 0.22)));
+    // Ticker + percent font: smaller
+    const subFontSize = Math.max(9, Math.min(20, Math.floor(base * 0.14)));
+    return (
+      <g onClick={() => symbol && navigate(`/stock/${symbol}`)} style={{ cursor: symbol ? "pointer" : "default" }}>
+        <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={2} />
+        {width > 30 && height > 20 && (
+          <>
+            {/* Ticker name (big) */}
+            <text
+              x={cx}
+              y={height > 60 ? cy - subFontSize * 0.8 : cy}
+              fill="#fff"
+              fontSize={nameFontSize}
+              fontWeight={700}
+              textAnchor="middle"
+              dominantBaseline="central"
+            >
+              {symbol}
+            </text>
+            {/* Live change percent (below ticker) */}
+            {height > 60 && (
+              <text
+                x={cx}
+                y={cy + nameFontSize * 0.9}
+                fill="#ffffffcc"
+                fontSize={subFontSize}
+                fontWeight={600}
+                textAnchor="middle"
+                dominantBaseline="central"
+              >
+                {typeof change === "number" ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : ""}
+              </text>
+            )}
+
+          </>
+        )}
+      </g>
+    );
+  }
+
+  function TreemapTooltip({ active, payload }: any) {
+    if (!active || !payload || !payload.length) return null;
+    const node = payload[0].payload || payload[0];
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-lg text-sm">
+        <p className="font-medium text-gray-900">{node.symbol}</p>
+        <p className="text-gray-600">{node.name}</p>
+        <p className="mt-1">${(node.value ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} ({(typeof node.allocation === "number" ? node.allocation : 0).toFixed(1)}%)</p>
+      </div>
+    );
+  }
+
   const watchlistItems = useMemo(
     () =>
       watchlistSymbols
@@ -552,10 +621,12 @@ export function Portfolio() {
               {CHART_TIMEFRAMES.map((tf) => (
                 <Button
                   key={tf.id}
-                  variant={timeframe.id === tf.id && !showAllocation ? "secondary" : "ghost"}
+                  variant={!showMap && timeframe.id === tf.id && !showAllocation ? "secondary" : "ghost"}
                   size="sm"
                   className="h-7 px-2 text-xs"
+                  disabled={showMap}
                   onClick={() => {
+                    if (showMap) return;
                     setTimeframe(tf);
                     setShowAllocation(false);
                   }}
@@ -568,15 +639,72 @@ export function Portfolio() {
                 variant={showAllocation ? "secondary" : "ghost"}
                 size="sm"
                 className="h-7 px-2 text-xs"
+                disabled={showMap}
                 onClick={() => setShowAllocation((p) => !p)}
               >
                 Allocation
+              </Button>
+              <Button
+                key="map"
+                variant={showMap ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setShowMap((p) => !p);
+                  setShowAllocation(false);
+                }}
+              >
+                MAP
               </Button>
             </div>
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {showAllocation ? (
+          {showMap ? (
+            <div className="h-[320px]">
+              <ResponsiveContainer width="100%" height={320}>
+                <Treemap
+                  data={
+                    (() => {
+                      if (!holdings || holdings.length === 0) {
+                        return [
+                          { symbol: "NVDA", name: "NVIDIA Corporation", size: 28.5, allocation: 28.5, changePercent: 1.23, value: 25650 },
+                          { symbol: "MSFT", name: "Microsoft Corporation", size: 12.4, allocation: 12.4, changePercent: -0.45, value: 11160 },
+                          { symbol: "AAPL", name: "Apple Inc.", size: 9.8, allocation: 9.8, changePercent: 0.72, value: 8820 },
+                          { symbol: "AMZN", name: "Amazon.com, Inc.", size: 8.2, allocation: 8.2, changePercent: -1.02, value: 7380 },
+                          { symbol: "GOOGL", name: "Alphabet Inc.", size: 7.5, allocation: 7.5, changePercent: 0.5, value: 6750 },
+                          { symbol: "META", name: "Meta Platforms, Inc.", size: 6.0, allocation: 6.0, changePercent: 2.1, value: 5400 },
+                          { symbol: "TSLA", name: "Tesla, Inc.", size: 5.6, allocation: 5.6, changePercent: -0.8, value: 5040 },
+                          { symbol: "UNH", name: "UnitedHealth Group Incorporated", size: 4.7, allocation: 4.7, changePercent: 0.3, value: 4230 },
+                          { symbol: "XOM", name: "Exxon Mobil Corporation", size: 3.9, allocation: 3.9, changePercent: -0.2, value: 3510 },
+                          { symbol: "JPM", name: "JPMorgan Chase & Co.", size: 2.4, allocation: 2.4, changePercent: 0.15, value: 2160 },
+                        ];
+                      }
+                      const total = Math.max(1, totalValue || holdings.reduce((s, h) => s + h.value, 0));
+                      return holdings
+                        .slice()
+                        .sort((a, b) => b.value - a.value)
+                        .slice(0, 10)
+                        .map((h) => ({
+                          symbol: h.symbol,
+                          name: h.name ?? h.symbol,
+                          size: h.allocation ?? (total > 0 ? (h.value / total) * 100 : 0),
+                          allocation: h.allocation ?? (total > 0 ? (h.value / total) * 100 : 0),
+                          changePercent: holdingsQuotes?.[h.symbol]?.changePercent ?? h.changePercent ?? 0,
+                          value: h.value,
+                        }));
+                    })()
+                  }
+                  dataKey="size"
+                  ratio={4 / 3}
+                  stroke="#ffffff"
+                  content={<CustomizedTreemapContent />}
+                >
+                  <Tooltip content={<TreemapTooltip />} />
+                </Treemap>
+              </ResponsiveContainer>
+            </div>
+          ) : showAllocation ? (
             <div className="h-[320px]">
               <PortfolioPieChart holdings={holdings} />
             </div>
