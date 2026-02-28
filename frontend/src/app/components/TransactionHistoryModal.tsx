@@ -115,11 +115,11 @@ export function TransactionHistoryModal({
               <div className="rounded-lg border border-gray-200 overflow-hidden">
                 <div className="grid grid-cols-7 gap-2 px-4 py-3 text-xs font-medium text-gray-500 bg-gray-50 border-b">
                   <div className="col-span-2">Date</div>
-                  <div>Type</div>
-                  <div className="text-right">Shares</div>
-                  <div className="text-right">Price</div>
-                  <div className="text-right">Total</div>
-                  <div className="text-right">Action</div>
+                  <div className="flex items-center justify-center">Type</div>
+                  <div className="flex items-center justify-center">Shares</div>
+                  <div className="flex items-center justify-center">Price</div>
+                  <div className="flex items-center justify-center">Total</div>
+                  <div className="flex items-center justify-center">Action</div>
                 </div>
                 {transactions.map((txn) => {
                   const totalCost = txn.shares * txn.price_per_share;
@@ -130,8 +130,10 @@ export function TransactionHistoryModal({
                       key={txn.id}
                       className="grid grid-cols-7 gap-2 px-4 py-3 text-sm border-b last:border-b-0 hover:bg-gray-50 items-center"
                     >
-                      <div className="col-span-2">{transactionDate.toLocaleDateString()}</div>
-                      <div className="capitalize">
+                      <div className="col-span-2">
+                        {transactionDate.toLocaleDateString()}
+                      </div>
+                      <div className="capitalize flex items-center justify-center">
                         <span
                           className={`px-2 py-1 rounded text-xs font-medium ${
                             txn.transaction_type === "buy"
@@ -142,12 +144,16 @@ export function TransactionHistoryModal({
                           {txn.transaction_type}
                         </span>
                       </div>
-                      <div className="text-right">{txn.shares}</div>
-                      <div className="text-right">
+                      <div className="flex items-center justify-center">
+                        {txn.shares}
+                      </div>
+                      <div className="flex items-center justify-center">
                         ${txn.price_per_share.toFixed(2)}
                       </div>
-                      <div className="text-right">${totalCost.toFixed(2)}</div>
-                      <div className="text-right flex justify-end">
+                      <div className="flex items-center justify-center">
+                        ${totalCost.toFixed(2)}
+                      </div>
+                      <div className="flex items-center justify-center">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -189,7 +195,9 @@ export function TransactionHistoryModal({
                   <span className="text-gray-600">Net Current Value</span>
                   <span className="font-medium text-gray-900">
                     $
-                    {currentValue.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    {currentValue.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                    })}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm pt-2 border-t">

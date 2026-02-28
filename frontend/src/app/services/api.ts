@@ -1,9 +1,13 @@
 // API Service for communicating with the backend
-const ENV_API_BASE_URL = ((import.meta.env.VITE_API_URL as string | undefined) || "").trim();
+const ENV_API_BASE_URL = (
+  (import.meta.env.VITE_API_URL as string | undefined) || ""
+).trim();
 const IS_LOCAL_BROWSER =
   typeof window !== "undefined" &&
-  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-const API_BASE_URL = ENV_API_BASE_URL || (IS_LOCAL_BROWSER ? "http://localhost:3000" : "");
+  (window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1");
+const API_BASE_URL =
+  ENV_API_BASE_URL || (IS_LOCAL_BROWSER ? "http://localhost:3000" : "");
 const GEMINI_API_KEY_STORAGE = "gemini_api_key";
 
 export interface ApiRequestConfig extends RequestInit {
@@ -123,6 +127,20 @@ export async function fetchPortfolioSnapshots(
   return apiCall<PortfolioSnapshot[]>(`/api/portfolio/snapshots${query}`, {
     method: "GET",
     token,
+  });
+}
+
+export interface BenchmarkPoint {
+  date: string;
+  return: number; // percent since base
+}
+
+export async function fetchMarketBenchmark(
+  days?: number,
+): Promise<BenchmarkPoint[]> {
+  const query = days ? `?days=${days}` : "";
+  return apiCall<BenchmarkPoint[]>(`/api/market/benchmark${query}`, {
+    method: "GET",
   });
 }
 
@@ -308,7 +326,9 @@ export interface ThesisEquity {
   updated_at?: string;
 }
 
-export async function fetchThesisEquities(token: string): Promise<ThesisEquity[]> {
+export async function fetchThesisEquities(
+  token: string,
+): Promise<ThesisEquity[]> {
   return apiCall<ThesisEquity[]>("/api/thesis/equities", {
     method: "GET",
     token,
@@ -359,18 +379,25 @@ export interface DashboardStats {
   avgCoolingHours: number;
 }
 
-export async function fetchDashboardStats(token: string): Promise<DashboardStats> {
+export async function fetchDashboardStats(
+  token: string,
+): Promise<DashboardStats> {
   return apiCall<DashboardStats>("/api/thesis/dashboard-stats", {
     method: "GET",
     token,
   });
 }
 
-export async function seedDecisionEvents(token: string): Promise<{ message: string; seeded: boolean }> {
-  return apiCall<{ message: string; seeded: boolean }>("/api/thesis/decision-events/seed", {
-    method: "POST",
-    token,
-  });
+export async function seedDecisionEvents(
+  token: string,
+): Promise<{ message: string; seeded: boolean }> {
+  return apiCall<{ message: string; seeded: boolean }>(
+    "/api/thesis/decision-events/seed",
+    {
+      method: "POST",
+      token,
+    },
+  );
 }
 
 // ============== Posts/Community APIs ==============
@@ -507,7 +534,9 @@ export interface NewsArticle extends Post {
 
 export async function fetchNews(ticker?: string): Promise<NewsArticle[]> {
   const normalizedTicker = ticker ? ticker.trim().toUpperCase() : "";
-  const query = normalizedTicker ? `?stock_ticker=${encodeURIComponent(normalizedTicker)}` : "";
+  const query = normalizedTicker
+    ? `?stock_ticker=${encodeURIComponent(normalizedTicker)}`
+    : "";
   return apiCall<NewsArticle[]>(`/api/news${query}`, {
     method: "GET",
   });
@@ -566,7 +595,9 @@ export interface AISettingsResponse {
   updatedAt?: string | null;
 }
 
-export async function fetchAISettings(token: string): Promise<AISettingsResponse> {
+export async function fetchAISettings(
+  token: string,
+): Promise<AISettingsResponse> {
   return apiCall<AISettingsResponse>("/api/user/settings/ai", {
     method: "GET",
     token,
