@@ -64,21 +64,93 @@ A modern web application for portfolio tracking, investment thesis management, a
 
 ### Prerequisites
 
-- Node.js 18+
-- npm or pnpm
+- Docker Desktop (recommended)
+- Node.js 20+ (only if running without Docker)
 
-### Install and Run
+### Run with Docker (recommended)
+
+This repo is a small fullstack app:
+- **backend**: Node/Express API on `http://localhost:3000`
+- **frontend**: Vite dev server on `http://localhost:5173`
+
+#### 1) Create a root `.env` for Docker Compose
+
+Create `/Users/chenpeng/TradingAgent/.env` (do **not** commit secrets):
 
 ```bash
-npm install
-npm run dev
+GEMINI_API_KEY=
+JWT_SECRET=dev-secret-change-me
+FRONTEND_URL=http://localhost:5173
+VITE_API_URL=http://localhost:3000
 ```
 
-Then open [http://localhost:5173](http://localhost:5173).
+Notes:
+- `GEMINI_API_KEY` is optional; leaving it empty disables AI features that require it.
+- `JWT_SECRET` should be changed for real deployments.
+
+#### 2) Start the stack
+
+```bash
+docker compose up --build -d
+```
+
+#### 3) Open the app
+
+- Frontend: `http://localhost:5173`
+- Backend health (example): `http://localhost:3000/api/posts`
+
+#### Useful commands
+
+```bash
+# Stop containers (keeps DB volume)
+docker compose down
+
+# Stop containers AND delete persisted SQLite volume
+docker compose down -v
+
+# Follow logs
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+#### Where is the database?
+
+When running via Docker Compose, SQLite is stored in a **named Docker volume**:
+- **DB path in container**: `/data/trading_platform.db`
+- **Volume name**: `backend-data` (see `docker-compose.yml`)
+
+### Run without Docker (local dev)
+
+If you prefer running services directly on your machine:
+
+#### Backend
+
+```bash
+cd backend
+npm install
+export PORT=3000
+export JWT_SECRET=dev-secret-change-me
+export FRONTEND_URL=http://localhost:5173
+export GEMINI_API_KEY=
+npm start
+```
+
+#### Frontend
+
+```bash
+cd frontend
+npm install
+export VITE_API_URL=http://localhost:3000
+npm run dev -- --host 0.0.0.0 --port 5173
+```
 
 ### Build for Production
 
+If you are using Docker, production builds are typically handled by your deployment pipeline.
+For a local build of the frontend:
+
 ```bash
+cd frontend
 npm run build
 ```
 
@@ -87,15 +159,18 @@ Output is in `dist/`.
 ## Project Structure
 
 ```
-src/
+backend/               # Express API + SQLite
+frontend/              # React/Vite UI
+frontend_old/          # Previous UI version (not the default)
+docker-compose.yml     # Runs frontend + backend together
+
+frontend/src/
 ├── app/
-│   ├── components/     # Shared UI (cards, modals, navigation, etc.)
-│   ├── data/          # Portfolio and transaction mock data
-│   ├── hooks/         # usePortfolio, useStockQuotes
-│   ├── pages/         # Dashboard, Portfolio, Stocks, Stock, Thesis, Community
-│   ├── routes.ts      # Route configuration
-│   └── utils/         # Data validation and helpers
-├── styles/            # Tailwind and theme
+│   ├── components/    # Shared UI (cards, modals, navigation, etc.)
+│   ├── hooks/         # e.g. usePortfolio, useStockQuotes
+│   ├── pages/         # Dashboard, Portfolio, Thesis, Community...
+│   ├── services/      # API client
+│   └── utils/         # Helpers
 └── main.tsx           # Entry point
 ```
 
