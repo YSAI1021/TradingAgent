@@ -304,9 +304,8 @@ export function AICopilotPanel() {
                 <button
                   key={prompt}
                   onClick={() => {
-                    setInput(prompt);
                     setShowPrompts(false);
-                    requestAnimationFrame(() => inputRef.current?.focus());
+                    void sendMessage(prompt);
                   }}
                   className="w-full text-left rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 transition-colors hover:border-blue-300 hover:bg-blue-50"
                 >

@@ -276,8 +276,6 @@ export function Portfolio() {
     }));
   }, [snapshots, timeframe, totalValue, totalCost, dailyPnl]);
 
-  const firstChartLabel = chartData?.[0]?.label;
-  const lastChartLabel = chartData?.[chartData.length - 1]?.label;
   const chartMinValue =
     chartData && chartData.length
       ? Math.min(...chartData.map((d) => d.value))
@@ -288,24 +286,29 @@ export function Portfolio() {
       : 0;
 
   const chartXTicks = useMemo(() => {
-    if (!chartData || chartData.length <= 2) return undefined;
-    return chartData
+    if (!chartData || chartData.length <= 2) return [];
+    // Use inner points by index (never first/last), deduplicated, ~4 evenly sampled
+    const inner = chartData.slice(1, -1);
+    const seen = new Set<string>();
+    const unique = inner
       .map((d) => d.label)
-      .filter((l) => l !== firstChartLabel && l !== lastChartLabel);
-  }, [chartData, firstChartLabel, lastChartLabel]);
+      .filter((l) => (seen.has(l) ? false : (seen.add(l), true)));
+    if (unique.length <= 4) return unique;
+    const step = (unique.length - 1) / 3;
+    return [0, 1, 2, 3].map((i) => unique[Math.round(i * step)]);
+  }, [chartData]);
 
   const chartYTicks = useMemo(() => {
-    if (!chartData || chartData.length === 0) return undefined;
+    if (!chartData || chartData.length === 0) return [];
     const tickCount = 5;
-    if (chartMinValue === chartMaxValue) return undefined;
+    if (chartMinValue === chartMaxValue) return [];
     const step = (chartMaxValue - chartMinValue) / (tickCount - 1);
     const ticks: number[] = [];
     for (let i = 0; i < tickCount; i++)
       ticks.push(Math.round(chartMinValue + step * i));
-    const filtered = ticks.filter(
+    return ticks.filter(
       (t) => t !== Math.round(chartMinValue) && t !== Math.round(chartMaxValue),
     );
-    return filtered.length ? filtered : undefined;
   }, [chartData, chartMinValue, chartMaxValue]);
   const [benchmarkPct, setBenchmarkPct] = useState<number | null>(null);
 
@@ -624,11 +627,10 @@ export function Portfolio() {
                   variant={!showMap && timeframe.id === tf.id && !showAllocation ? "secondary" : "ghost"}
                   size="sm"
                   className="h-7 px-2 text-xs"
-                  disabled={showMap}
                   onClick={() => {
-                    if (showMap) return;
                     setTimeframe(tf);
                     setShowAllocation(false);
+                    setShowMap(false);
                   }}
                 >
                   {tf.label}
@@ -639,8 +641,7 @@ export function Portfolio() {
                 variant={showAllocation ? "secondary" : "ghost"}
                 size="sm"
                 className="h-7 px-2 text-xs"
-                disabled={showMap}
-                onClick={() => setShowAllocation((p) => !p)}
+                onClick={() => { setShowAllocation((p) => !p); setShowMap(false); }}
               >
                 Allocation
               </Button>
@@ -710,9 +711,13 @@ export function Portfolio() {
             </div>
           ) : (
             <div className="h-[320px]">
-              {loadingSnapshots && chartData.length === 0 ? (
+              {loadingSnapshots ? (
                 <div className="h-full flex items-center justify-center text-gray-500">
                   Loading chart...
+                </div>
+              ) : !snapshots.length ? (
+                <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                  No portfolio history yet. Data will appear after your first recorded snapshot.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -727,19 +732,24 @@ export function Portfolio() {
                       tickLine={false}
                       axisLine={{ stroke: "#d1d5db" }}
                       minTickGap={80}
-                      ticks={chartXTicks}
+                      {...(chartXTicks.length > 0 ? { ticks: chartXTicks } : {})}
                       tickFormatter={(value) => String(value)}
                     />
                     <YAxis
                       tick={{ fontSize: 11, fill: "#6b7280" }}
                       tickLine={false}
                       axisLine={{ stroke: "#d1d5db" }}
-                      ticks={chartYTicks}
-                      tickFormatter={(value) =>
-                        `$${Math.round(Number(value)).toLocaleString()}`
-                      }
+                      {...(chartYTicks.length > 0 ? { ticks: chartYTicks } : {})}
+                      tickFormatter={(value) => {
+                        const n = Math.round(Number(value));
+                        if (
+                          n === Math.round(chartMinValue) ||
+                          n === Math.round(chartMaxValue)
+                        )
+                          return "";
+                        return `$${n.toLocaleString()}`;
+                      }}
                       width={72}
-                      tickCount={5}
                     />
                     <Tooltip
                       formatter={(value: number) => [

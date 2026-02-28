@@ -1,9 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router";
-import { Button } from "@/app/components/ui/button";
-import { Card, CardContent } from "@/app/components/ui/card";
-import { Badge } from "@/app/components/ui/badge";
-import { cn } from "@/app/components/ui/utils";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/context/AuthContext";
 import {
@@ -12,47 +8,154 @@ import {
   saveOnboardingProfile,
 } from "@/app/services/api";
 
+// ─── Design tokens ────────────────────────────────────────────────
+const C = {
+  bg: "#EDEAE4",
+  bgCard: "#F5F3EF",
+  greenDark: "#2C4A3E",
+  greenMid: "#3D6355",
+  greenLight: "#8AAF9F",
+  greenPale: "#D4E4DC",
+  textPrimary: "#1A1A1A",
+  textSecondary: "#5C5C5C",
+  textMuted: "#9A9A9A",
+  border: "#D8D4CC",
+  redFlag: "#C0572A",
+} as const;
+
+// ─── Step 1 data ──────────────────────────────────────────────────
 const INVESTOR_TYPES = [
-  {
-    label: "Still learning",
-    icon: "🌱",
-    description: "Building confidence and improving decision habits.",
-  },
-  {
-    label: "Self-directed",
-    icon: "📈",
-    description: "Running your own process with moderate conviction.",
-  },
-  {
-    label: "Active trader",
-    icon: "⚡",
-    description: "Higher-frequency decisions and tighter risk controls.",
-  },
+  { label: "Still learning", icon: "🌱", description: "Under 3 years. Building habits and understanding." },
+  { label: "Self-directed", icon: "📊", description: "Experienced but prone to emotional decisions sometimes." },
+  { label: "Active trader", icon: "⚡", description: "High frequency, complex strategies, need a discipline mirror." },
 ] as const;
 
-const ASSET_TYPES = [
-  "Stocks",
-  "ETFs",
-  "Bonds",
-  "Real Estate",
-  "Crypto",
-  "Commodities",
-  "Cash",
+// ─── Step 2 data ──────────────────────────────────────────────────
+const ASSET_CLASSES = [
+  { icon: "📈", label: "Stocks" },
+  { icon: "🥇", label: "Gold & Precious Metals" },
+  { icon: "₿", label: "Crypto" },
+  { icon: "🏠", label: "Real Estate / REITs" },
+  { icon: "🏦", label: "Bonds / Fixed Income" },
+  { icon: "🌍", label: "ETFs / Index Funds" },
+  { icon: "🧪", label: "Options / Derivatives" },
+  { icon: "🌱", label: "Startup / Private Equity" },
+  { icon: "💵", label: "Cash / Money Market" },
 ] as const;
 
-const RISK_TOLERANCE_OPTIONS = ["Capital preservation", "Balanced growth", "Aggressive growth"] as const;
-const DECISION_HORIZON_OPTIONS = ["Hours", "Days", "Weeks", "Months+"] as const;
-const MARKET_FOCUS_OPTIONS = ["Macro trends", "Earnings events", "Valuation", "Momentum"] as const;
-
-const BASELINE_OPTIONS = [
-  { key: "panicSelling", label: "I tend to panic-sell during sharp drawdowns." },
-  { key: "reactiveChecking", label: "I check positions too frequently when volatility rises." },
-  { key: "shortDecisionWindow", label: "I often decide too quickly under pressure." },
-  { key: "overConcentration", label: "I let winners grow beyond my target size." },
+const REVIEW_FREQ_OPTIONS = ["Daily", "A few times a week", "Weekly", "Monthly or less"] as const;
+const HORIZON_OPTIONS = ["Under 1 year", "1–3 years", "3–10 years", "10+ years"] as const;
+const STRATEGY_OPTIONS = [
+  "Buy and hold (passive)",
+  "Selective stock picking",
+  "Active trading / timing",
+  "Thematic / macro bets",
 ] as const;
 
-type BaselineKey = (typeof BASELINE_OPTIONS)[number]["key"];
+// ─── Step 3 data ──────────────────────────────────────────────────
+const MARKET_DROP_OPTIONS = [
+  "Check my portfolio obsessively",
+  "Panic and want to sell",
+  "Feel anxious but hold",
+  "See it as an opportunity",
+] as const;
+const ENEMY_OPTIONS = [
+  "Fear of missing out",
+  "Panic selling",
+  "Overconfidence",
+  "Not knowing when to sell",
+] as const;
+const TIMING_OPTIONS = [
+  "In the moment",
+  "After a few hours of thinking",
+  "Over several days",
+  "With a clear system",
+] as const;
+
 const ONBOARDING_PROFILE_STORAGE_KEY = "onboarding_profile";
+
+// ─── Reusable pill-choice group ───────────────────────────────────
+function PillGroup({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: readonly string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div style={{ width: "100%", marginBottom: 28 }}>
+      <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, marginBottom: 12 }}>{label}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {options.map((opt) => {
+          const sel = value === opt;
+          return (
+            <button
+              key={opt}
+              onClick={() => onChange(opt)}
+              style={{
+                fontSize: 13.5,
+                fontWeight: sel ? 500 : 400,
+                color: sel ? "#fff" : C.textSecondary,
+                background: sel ? C.greenDark : C.bgCard,
+                border: `1.5px solid ${sel ? C.greenDark : C.border}`,
+                borderRadius: 100,
+                padding: "9px 18px",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                transition: "all 0.18s",
+              }}
+            >
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Full-width pill primary button ───────────────────────────────
+function PrimaryButton({
+  label,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        width: "100%",
+        background: disabled ? C.greenLight : C.greenDark,
+        color: "#fff",
+        border: "none",
+        borderRadius: 100,
+        padding: "17px 32px",
+        fontFamily: "inherit",
+        fontSize: 15,
+        fontWeight: 500,
+        cursor: disabled ? "not-allowed" : "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        marginTop: 8,
+        opacity: disabled ? 0.7 : 1,
+        transition: "all 0.2s",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
 
 export function Onboarding() {
   const navigate = useNavigate();
@@ -62,12 +165,17 @@ export function Onboarding() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [step, setStep] = useState(1);
+  // Step 1
   const [investorType, setInvestorType] = useState<string>("");
+  // Step 2
   const [assetTypes, setAssetTypes] = useState<string[]>([]);
-  const [riskTolerance, setRiskTolerance] = useState<string>("");
-  const [decisionHorizon, setDecisionHorizon] = useState<string>("");
-  const [marketFocus, setMarketFocus] = useState<string>("");
-  const [baselineFlags, setBaselineFlags] = useState<BaselineKey[]>(["panicSelling", "shortDecisionWindow"]);
+  const [reviewFrequency, setReviewFrequency] = useState<string>("");
+  const [investmentHorizon, setInvestmentHorizon] = useState<string>("");
+  const [strategy, setStrategy] = useState<string>("");
+  // Step 3
+  const [marketDropReaction, setMarketDropReaction] = useState<string>("");
+  const [biggestEnemy, setBiggestEnemy] = useState<string>("");
+  const [decisionTiming, setDecisionTiming] = useState<string>("");
   const [investmentAnchor, setInvestmentAnchor] = useState("");
 
   useEffect(() => {
@@ -76,14 +184,14 @@ export function Onboarding() {
     const applyProfile = (profile: Partial<OnboardingProfile>) => {
       setInvestorType(profile.investorType || "");
       setAssetTypes(Array.isArray(profile.assetTypes) ? profile.assetTypes : []);
-      setRiskTolerance(profile.riskTolerance || "");
-      setDecisionHorizon(profile.decisionHorizon || "");
-      setMarketFocus(profile.marketFocus || "");
-      setBaselineFlags(
-        Array.isArray(profile.baselineFlags)
-          ? (profile.baselineFlags as BaselineKey[])
-          : ["panicSelling", "shortDecisionWindow"],
-      );
+      // riskTolerance stored reviewFrequency, decisionHorizon stored investmentHorizon, marketFocus stored strategy
+      setReviewFrequency(profile.riskTolerance || "");
+      setInvestmentHorizon(profile.decisionHorizon || "");
+      setStrategy(profile.marketFocus || "");
+      const flags = Array.isArray(profile.baselineFlags) ? profile.baselineFlags : [];
+      setMarketDropReaction(flags[0] || "");
+      setBiggestEnemy(flags[1] || "");
+      setDecisionTiming(flags[2] || "");
       setInvestmentAnchor(profile.investmentAnchor || "");
     };
 
@@ -116,60 +224,38 @@ export function Onboarding() {
       .finally(() => setLoadingProfile(false));
   }, [token]);
 
-  const next = () => setStep((prev) => Math.min(4, prev + 1));
-  const skip = () => next();
-
-  const toggleAssetType = (assetType: string) => {
-    setAssetTypes((prev) =>
-      prev.includes(assetType) ? prev.filter((item) => item !== assetType) : [...prev, assetType],
-    );
-  };
-
-  const toggleBaselineFlag = (flag: BaselineKey) => {
-    setBaselineFlags((prev) => (prev.includes(flag) ? prev.filter((item) => item !== flag) : [...prev, flag]));
+  const toggleAsset = (label: string) => {
+    setAssetTypes((prev) => (prev.includes(label) ? prev.filter((a) => a !== label) : [...prev, label]));
   };
 
   const behavioralFlags = useMemo(() => {
-    const flags: string[] = [];
-
-    if (baselineFlags.includes("panicSelling")) flags.push("Panic Selling Risk");
-    if (baselineFlags.includes("reactiveChecking")) flags.push("Reactive Checking");
-    if (baselineFlags.includes("shortDecisionWindow")) flags.push("Short Decision Window");
-    if (baselineFlags.includes("overConcentration")) flags.push("Concentration Drift");
-    if (assetTypes.includes("Crypto")) flags.push("High Volatility Exposure");
-
-    if (flags.length === 0) {
-      flags.push("Balanced Decision Pattern");
-    }
-
+    const flags: { text: string }[] = [];
+    if (biggestEnemy) flags.push({ text: `Tendency: ${biggestEnemy.toLowerCase()}` });
+    if (marketDropReaction) flags.push({ text: `Pattern: ${marketDropReaction.toLowerCase()} during volatility` });
+    if (decisionTiming) flags.push({ text: `Decision style: ${decisionTiming.toLowerCase()}` });
+    if (flags.length === 0) flags.push({ text: "No major behavioral flags detected" });
     return flags;
-  }, [assetTypes, baselineFlags]);
+  }, [biggestEnemy, marketDropReaction, decisionTiming]);
 
   const generatedThesis = useMemo(() => {
-    const investor = investorType || "self-directed";
-    const assets = assetTypes.length > 0 ? assetTypes.join(", ") : "diversified assets";
-    const risk = riskTolerance || "balanced growth";
-    const horizon = decisionHorizon || "weeks";
-    return `You are a ${investor} investor focused on ${assets}. Your default mode targets ${risk} with a ${horizon.toLowerCase()} decision horizon.`;
-  }, [investorType, assetTypes, riskTolerance, decisionHorizon]);
-
-  const blindSpots = useMemo(() => {
-    const items: string[] = [];
-    if (baselineFlags.includes("panicSelling")) items.push("Emotion-driven exits during volatility spikes");
-    if (baselineFlags.includes("shortDecisionWindow")) items.push("Compressed decision windows without full context");
-    if (baselineFlags.includes("overConcentration")) items.push("Position sizing drift beyond policy");
-    if (items.length === 0) items.push("No major behavioral blind spots detected");
-    return items;
-  }, [baselineFlags]);
+    return {
+      investor: investorType || "self-directed investor",
+      assets: assetTypes.length > 0 ? assetTypes.join(", ") : "diversified assets",
+      horizon: investmentHorizon || "medium-term",
+      strat: strategy || "selective stock picking",
+      enemy: biggestEnemy,
+    };
+  }, [investorType, assetTypes, investmentHorizon, strategy, biggestEnemy]);
 
   const completeOnboarding = async () => {
     const profile: OnboardingProfile = {
       investorType,
       assetTypes,
-      riskTolerance,
-      decisionHorizon,
-      marketFocus,
-      baselineFlags,
+      // Map new fields back to existing API field names for backend compatibility
+      riskTolerance: reviewFrequency,
+      decisionHorizon: investmentHorizon,
+      marketFocus: strategy,
+      baselineFlags: [marketDropReaction, biggestEnemy, decisionTiming].filter(Boolean),
       investmentAnchor: investmentAnchor.trim(),
       completedAt: new Date().toISOString(),
     };
@@ -195,268 +281,589 @@ export function Onboarding() {
 
   if (loadingProfile) {
     return (
-      <div className="min-h-screen bg-gray-50 px-4 py-10 flex items-center justify-center">
-        <div className="flex items-center gap-2 text-sm text-gray-600">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Loading onboarding...
+      <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: C.textSecondary }}>
+          <Loader2 style={{ width: 16, height: 16 }} className="animate-spin" />
+          Loading...
         </div>
       </div>
     );
   }
 
+  // ─── shared progress dots ─────────────────────────────────────
+  const dots = (
+    <div style={{ display: "flex", gap: 8, marginBottom: 40 }}>
+      {[1, 2, 3, 4].map((i) => (
+        <div
+          key={i}
+          style={{
+            height: 8,
+            borderRadius: 4,
+            transition: "all 0.3s",
+            width: i === step ? 28 : 8,
+            background: i < step ? C.greenMid : i === step ? C.greenDark : C.border,
+          }}
+        />
+      ))}
+    </div>
+  );
+
+  const serif: CSSProperties = {
+    fontFamily: "'Playfair Display', Georgia, serif",
+    fontSize: 32,
+    fontWeight: 500,
+    color: C.textPrimary,
+    textAlign: "center",
+    lineHeight: 1.2,
+    marginBottom: 12,
+    letterSpacing: "-0.5px",
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-10">
-      <div className="mx-auto max-w-3xl">
-        <div className="mb-6 flex items-center justify-center gap-2">
-          {[1, 2, 3, 4].map((index) => (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: C.bg,
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "'DM Sans', 'Inter', sans-serif",
+        color: C.textPrimary,
+      }}
+    >
+      {/* ── NAV ──────────────────────────────────────────────── */}
+      <nav
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: 60,
+          borderBottom: `1px solid ${C.border}`,
+          background: C.bg,
+          position: "sticky",
+          top: 0,
+          zIndex: 100,
+        }}
+      >
+        <span
+          style={{
+            fontFamily: "'Playfair Display', Georgia, serif",
+            fontSize: 20,
+            fontWeight: 600,
+            letterSpacing: "-0.3px",
+          }}
+        >
+          thesis.
+        </span>
+      </nav>
+
+      {/* ── MAIN ─────────────────────────────────────────────── */}
+      <main
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          padding: "40px 24px 80px",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 680,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+          }}
+        >
+          {error && (
             <div
-              key={index}
-              className={`h-2 rounded-full transition-all ${
-                index === step ? "w-8 bg-gray-900" : index < step ? "w-2 bg-gray-700" : "w-6 bg-gray-300"
-              }`}
-            />
-          ))}
-        </div>
+              style={{
+                width: "100%",
+                marginBottom: 16,
+                borderRadius: 10,
+                border: "1px solid #fca5a5",
+                background: "#fef2f2",
+                padding: "10px 14px",
+                fontSize: 13,
+                color: "#b91c1c",
+              }}
+            >
+              {error}
+            </div>
+          )}
 
-        <Card>
-          <CardContent className="p-8">
-            {error && (
-              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                {error}
-              </div>
-            )}
-            {step === 1 && (
-              <div className="space-y-6">
-                <div>
-                  <h1 className="text-3xl font-semibold text-gray-900">Who are you as an investor?</h1>
-                  <p className="text-gray-600 mt-2">No judgment — just context.</p>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  {INVESTOR_TYPES.map((type) => (
-                    <button
+          {/* ── STEP 1: Investor Type ─────────────────────────── */}
+          {step === 1 && (
+            <>
+              {dots}
+              <h1 style={serif}>Who are you as an investor?</h1>
+              <p
+                style={{
+                  fontSize: 15,
+                  color: C.textSecondary,
+                  textAlign: "center",
+                  lineHeight: 1.6,
+                  maxWidth: 520,
+                  marginBottom: 40,
+                }}
+              >
+                This helps us calibrate your rules and guardrails. No judgment — just context.
+              </p>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 14,
+                  width: "100%",
+                  marginBottom: 40,
+                }}
+              >
+                {INVESTOR_TYPES.map((type) => {
+                  const sel = investorType === type.label;
+                  return (
+                    <div
                       key={type.label}
-                      type="button"
-                      className={cn(
-                        "rounded-xl border px-4 py-5 text-sm text-left transition-colors shadow-sm",
-                        investorType === type.label
-                          ? "border-gray-900 bg-gray-900 text-white"
-                          : "border-gray-200 bg-white hover:border-gray-300",
-                      )}
                       onClick={() => setInvestorType(type.label)}
+                      style={{
+                        background: sel ? "#EBF2EE" : C.bgCard,
+                        border: `1.5px solid ${sel ? C.greenDark : C.border}`,
+                        borderRadius: 16,
+                        padding: "28px 20px",
+                        cursor: "pointer",
+                        textAlign: "center",
+                        boxShadow: sel
+                          ? `0 0 0 2px ${C.greenDark}, 0 4px 20px rgba(44,74,62,0.12)`
+                          : "0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04)",
+                        transition: "all 0.2s",
+                      }}
                     >
-                      <p className="text-xl mb-2">{type.icon}</p>
-                      <p className="font-medium">{type.label}</p>
-                      <p className={cn("mt-1 text-xs", investorType === type.label ? "text-gray-200" : "text-gray-500")}>
+                      <div style={{ fontSize: 28, marginBottom: 14 }}>{type.icon}</div>
+                      <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 8 }}>{type.label}</div>
+                      <div style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.5 }}>
                         {type.description}
-                      </p>
-                    </button>
-                  ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <PrimaryButton label="Continue →" onClick={() => setStep(2)} disabled={!investorType} />
+            </>
+          )}
+
+          {/* ── STEP 2: Portfolio Profile ─────────────────────── */}
+          {step === 2 && (
+            <>
+              {dots}
+              <h1 style={serif}>What does your portfolio look like?</h1>
+              <p
+                style={{
+                  fontSize: 15,
+                  color: C.textSecondary,
+                  textAlign: "center",
+                  lineHeight: 1.6,
+                  maxWidth: 520,
+                  marginBottom: 40,
+                }}
+              >
+                Select what you currently invest in or plan to. This shapes how we interpret your decisions.
+              </p>
+
+              {/* Asset class label */}
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: C.textMuted,
+                  textAlign: "left",
+                  width: "100%",
+                  marginBottom: 8,
+                  letterSpacing: "0.04em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Asset classes (select all that apply)
+              </div>
+
+              {/* Asset grid */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 10,
+                  width: "100%",
+                  marginBottom: 24,
+                }}
+              >
+                {ASSET_CLASSES.map(({ icon, label }) => {
+                  const sel = assetTypes.includes(label);
+                  return (
+                    <div
+                      key={label}
+                      onClick={() => toggleAsset(label)}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 8,
+                        background: sel ? "#EBF2EE" : C.bgCard,
+                        border: `1.5px solid ${sel ? C.greenDark : C.border}`,
+                        borderRadius: 12,
+                        padding: "18px 12px",
+                        cursor: "pointer",
+                        boxShadow: sel
+                          ? `0 0 0 2px ${C.greenDark}, 0 4px 20px rgba(44,74,62,0.12)`
+                          : "0 1px 3px rgba(0,0,0,0.06)",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      <div style={{ fontSize: 22 }}>{icon}</div>
+                      <span style={{ fontSize: 13, fontWeight: 500, textAlign: "center" }}>{label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Divider */}
+              <div style={{ width: "100%", height: 1, background: C.border, margin: "8px 0 24px" }} />
+
+              <PillGroup
+                label="How often do you review your portfolio?"
+                options={REVIEW_FREQ_OPTIONS}
+                value={reviewFrequency}
+                onChange={setReviewFrequency}
+              />
+              <PillGroup
+                label="What's your primary investment horizon?"
+                options={HORIZON_OPTIONS}
+                value={investmentHorizon}
+                onChange={setInvestmentHorizon}
+              />
+              <PillGroup
+                label="Which best describes your current strategy?"
+                options={STRATEGY_OPTIONS}
+                value={strategy}
+                onChange={setStrategy}
+              />
+
+              <PrimaryButton label="Continue →" onClick={() => setStep(3)} />
+            </>
+          )}
+
+          {/* ── STEP 3: Behavioral Baseline ───────────────────── */}
+          {step === 3 && (
+            <>
+              {dots}
+              <h1 style={serif}>Your honest baseline</h1>
+              <p
+                style={{
+                  fontSize: 15,
+                  color: C.textSecondary,
+                  textAlign: "center",
+                  lineHeight: 1.6,
+                  maxWidth: 520,
+                  marginBottom: 40,
+                }}
+              >
+                Quick questions to build your behavioral profile. There are no wrong answers.
+              </p>
+
+              <PillGroup
+                label="When the market drops 15%, my gut reaction is usually…"
+                options={MARKET_DROP_OPTIONS}
+                value={marketDropReaction}
+                onChange={setMarketDropReaction}
+              />
+              <PillGroup
+                label="My biggest investing enemy is…"
+                options={ENEMY_OPTIONS}
+                value={biggestEnemy}
+                onChange={setBiggestEnemy}
+              />
+              <PillGroup
+                label="I typically make investment decisions…"
+                options={TIMING_OPTIONS}
+                value={decisionTiming}
+                onChange={setDecisionTiming}
+              />
+
+              {/* Anchor textarea */}
+              <div style={{ width: "100%", marginBottom: 32 }}>
+                <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, marginBottom: 12 }}>
+                  Write your investment anchor{" "}
+                  <span style={{ color: C.textMuted, fontWeight: 400 }}>(optional)</span>
                 </div>
-                <div className="flex justify-end">
-                  <Button onClick={next} size="sm" disabled={!investorType}>
-                    Continue
-                  </Button>
+                <textarea
+                  value={investmentAnchor}
+                  onChange={(e) => setInvestmentAnchor(e.target.value)}
+                  placeholder="e.g. I'm a long-term investor. I believe in broad diversification and holding through volatility. I invest for 15+ years and I don't try to time the market."
+                  style={{
+                    width: "100%",
+                    background: "#fff",
+                    border: `1.5px solid ${C.border}`,
+                    borderRadius: 16,
+                    padding: 20,
+                    fontFamily: "inherit",
+                    fontSize: 14.5,
+                    color: C.textPrimary,
+                    lineHeight: 1.7,
+                    resize: "none",
+                    minHeight: 160,
+                    outline: "none",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04)",
+                    transition: "border-color 0.2s",
+                  }}
+                />
+              </div>
+
+              <PrimaryButton label="Continue →" onClick={() => setStep(4)} />
+            </>
+          )}
+
+          {/* ── STEP 4: Thesis Summary ────────────────────────── */}
+          {step === 4 && (
+            <>
+              {dots}
+              <div style={{ fontSize: 48, marginBottom: 20 }}>🔒</div>
+              <h1 style={serif}>Your investment thesis is set.</h1>
+              <p
+                style={{
+                  fontSize: 15,
+                  color: C.textSecondary,
+                  textAlign: "center",
+                  lineHeight: 1.6,
+                  maxWidth: 520,
+                  marginBottom: 40,
+                }}
+              >
+                This is version 1.0 — a living document. As you use Arcis, it will evolve with you.
+              </p>
+
+              {/* Investor Profile card */}
+              <div style={{ width: "100%", marginBottom: 20 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 500,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: C.textMuted,
+                    marginBottom: 10,
+                  }}
+                >
+                  Your Investor Profile
+                </div>
+                <div
+                  style={{
+                    background: C.bgCard,
+                    border: `1.5px solid ${C.border}`,
+                    borderRadius: 16,
+                    padding: "20px 24px",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}>TYPE</div>
+                    <div style={{ fontSize: 14.5, fontWeight: 500 }}>{investorType || "—"}</div>
+                  </div>
+                  {assetTypes.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 6 }}>HOLDS</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {assetTypes.map((a) => {
+                          const found = ASSET_CLASSES.find((ac) => ac.label === a);
+                          return (
+                            <span
+                              key={a}
+                              style={{
+                                fontSize: 12.5,
+                                fontWeight: 500,
+                                padding: "5px 12px",
+                                borderRadius: 100,
+                                background: C.greenPale,
+                                color: C.greenDark,
+                              }}
+                            >
+                              {found ? `${found.icon} ${a}` : a}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {(investmentHorizon || strategy) && (
+                    <div>
+                      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}>HORIZON</div>
+                      <div style={{ fontSize: 14.5 }}>
+                        {[investmentHorizon, strategy].filter(Boolean).join(" · ")}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-            )}
 
-            {step === 2 && (
-              <div className="space-y-6">
-                <div>
-                  <h1 className="text-3xl font-semibold text-gray-900">What does your portfolio look like?</h1>
-                  <p className="text-gray-600 mt-2">This shapes how we interpret your decisions.</p>
+              {/* Behavioral Flags card */}
+              <div style={{ width: "100%", marginBottom: 20 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 500,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: C.textMuted,
+                    marginBottom: 10,
+                  }}
+                >
+                  Behavioral Flags Detected
                 </div>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  {ASSET_TYPES.map((asset) => (
-                    <button
-                      key={asset}
-                      type="button"
-                      className={cn(
-                        "rounded-lg border px-3 py-3 text-sm text-left transition-colors",
-                        assetTypes.includes(asset)
-                          ? "border-gray-900 bg-gray-900 text-white"
-                          : "border-gray-200 bg-white hover:border-gray-300",
-                      )}
-                      onClick={() => toggleAssetType(asset)}
+                <div
+                  style={{
+                    background: C.bgCard,
+                    border: `1.5px solid ${C.border}`,
+                    borderRadius: 16,
+                    padding: "20px 24px",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  {behavioralFlags.map((flag, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 0",
+                        borderBottom:
+                          i < behavioralFlags.length - 1 ? `1px solid ${C.border}` : "none",
+                        fontSize: 14,
+                        color: C.redFlag,
+                      }}
                     >
-                      {asset}
-                    </button>
+                      <div
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: "50%",
+                          background: C.redFlag,
+                          flexShrink: 0,
+                        }}
+                      />
+                      {flag.text}
+                    </div>
                   ))}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-800 mb-2">Risk tolerance</p>
-                  <div className="flex flex-wrap gap-2">
-                    {RISK_TOLERANCE_OPTIONS.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-xs transition-colors",
-                          riskTolerance === option
-                            ? "border-gray-900 bg-gray-900 text-white"
-                            : "border-gray-200 bg-white text-gray-700 hover:border-gray-300",
-                        )}
-                        onClick={() => setRiskTolerance(option)}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-800 mb-2">Decision horizon</p>
-                  <div className="flex flex-wrap gap-2">
-                    {DECISION_HORIZON_OPTIONS.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-xs transition-colors",
-                          decisionHorizon === option
-                            ? "border-gray-900 bg-gray-900 text-white"
-                            : "border-gray-200 bg-white text-gray-700 hover:border-gray-300",
-                        )}
-                        onClick={() => setDecisionHorizon(option)}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-800 mb-2">Primary market focus</p>
-                  <div className="flex flex-wrap gap-2">
-                    {MARKET_FOCUS_OPTIONS.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-xs transition-colors",
-                          marketFocus === option
-                            ? "border-gray-900 bg-gray-900 text-white"
-                            : "border-gray-200 bg-white text-gray-700 hover:border-gray-300",
-                        )}
-                        onClick={() => setMarketFocus(option)}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex items-center justify-end gap-4">
-                  <button
-                    type="button"
-                    className="text-sm text-gray-500 hover:text-gray-700"
-                    onClick={skip}
-                  >
-                    Skip
-                  </button>
-                  <Button onClick={next} size="sm">
-                    Continue
-                  </Button>
                 </div>
               </div>
-            )}
 
-            {step === 3 && (
-              <div className="space-y-6">
-                <div>
-                  <h1 className="text-3xl font-semibold text-gray-900">Your honest baseline</h1>
-                  <p className="text-gray-600 mt-2">There are no wrong answers.</p>
+              {/* Thesis preview card */}
+              <div style={{ width: "100%", marginBottom: 20 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 500,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: C.textMuted,
+                    marginBottom: 10,
+                  }}
+                >
+                  Your Thesis — Draft v1.0
                 </div>
-                <div className="space-y-3">
-                  {BASELINE_OPTIONS.map((option) => (
-                    <button
-                      key={option.key}
-                      type="button"
-                      className={cn(
-                        "w-full rounded-lg border px-4 py-3 text-sm text-left transition-colors",
-                        baselineFlags.includes(option.key)
-                          ? "border-gray-900 bg-gray-900 text-white"
-                          : "border-gray-200 bg-white hover:border-gray-300",
-                      )}
-                      onClick={() => toggleBaselineFlag(option.key)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                  <textarea
-                    className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm min-h-[120px]"
-                    placeholder="Optional: write your long-term investment anchor"
-                    value={investmentAnchor}
-                    onChange={(event) => setInvestmentAnchor(event.target.value)}
+                <div
+                  style={{
+                    background: "linear-gradient(135deg, #EBF2EE 0%, #F5F3EF 100%)",
+                    border: `1.5px solid ${C.greenPale}`,
+                    borderRadius: 16,
+                    padding: "24px 24px 24px 28px",
+                    fontSize: 14.5,
+                    lineHeight: 1.8,
+                    color: C.textPrimary,
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                    position: "relative",
+                    overflow: "hidden",
+                  }}
+                >
+                  {/* Left accent border */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: 4,
+                      height: "100%",
+                      background: C.greenDark,
+                      borderRadius: "4px 0 0 4px",
+                    }}
                   />
-                </div>
-                <div className="flex items-center justify-end gap-4">
-                  <button
-                    type="button"
-                    className="text-sm text-gray-500 hover:text-gray-700"
-                    onClick={skip}
+                  <span
+                    style={{
+                      display: "inline-block",
+                      fontSize: 11,
+                      fontWeight: 500,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: C.greenDark,
+                      background: C.greenPale,
+                      borderRadius: 100,
+                      padding: "3px 10px",
+                      marginBottom: 12,
+                    }}
                   >
-                    Skip
-                  </button>
-                  <Button onClick={next} size="sm">
-                    Continue
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {step === 4 && (
-              <div className="space-y-6">
-                <div>
-                  <h1 className="text-3xl font-semibold text-gray-900">Your investment thesis is set.</h1>
-                  <p className="text-gray-600 mt-2">
-                    As you use My Investment Thesis, it will evolve with you.
+                    📌 Living Document
+                  </span>
+                  <p>
+                    I'm a <strong>{generatedThesis.investor}</strong> with a{" "}
+                    <strong>{generatedThesis.horizon}</strong> horizon, primarily in{" "}
+                    {generatedThesis.assets}. I practice{" "}
+                    <strong>{generatedThesis.strat}</strong>
+                    {reviewFrequency ? ` and review my portfolio ${reviewFrequency.toLowerCase()}` : ""}.
                   </p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-white p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                    AI-Generated Thesis
-                  </p>
-                  <p className="text-sm text-gray-700">{generatedThesis}</p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                    Behavioral Flags
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {behavioralFlags.map((flag) => (
-                      <Badge key={flag} variant="secondary">
-                        {flag}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                    Potential Blind Spots
-                  </p>
-                  <div className="space-y-1">
-                    {blindSpots.map((item) => (
-                      <p key={item} className="text-sm text-gray-700">
-                        • {item}
+                  {generatedThesis.enemy && (
+                    <>
+                      <br />
+                      <p>
+                        My core belief is in long-term compounding, though I'm aware I'm prone to{" "}
+                        <strong>{generatedThesis.enemy.toLowerCase()}</strong> and emotional
+                        decision-making during market stress. I aim to build guardrails that slow me
+                        down before acting.
                       </p>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex justify-end">
-                  <Button onClick={() => void completeOnboarding()} size="sm" disabled={saving}>
-                    {saving ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      "Build My First Rule"
-                    )}
-                  </Button>
+                    </>
+                  )}
+                  {investmentAnchor && (
+                    <>
+                      <br />
+                      <p
+                        style={{
+                          fontStyle: "italic",
+                          color: C.textSecondary,
+                          borderTop: `1px solid ${C.border}`,
+                          paddingTop: 12,
+                          fontSize: 14,
+                        }}
+                      >
+                        "{investmentAnchor}"
+                      </p>
+                    </>
+                  )}
+                  <br />
+                  <p style={{ fontSize: 13, color: C.textMuted }}>
+                    This thesis will automatically update as Thesis observes your decisions over time.
+                  </p>
                 </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+
+              <PrimaryButton
+                label={saving ? "Saving..." : "Build my first rule →"}
+                onClick={() => void completeOnboarding()}
+                disabled={saving}
+              />
+            </>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
