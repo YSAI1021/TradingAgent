@@ -132,7 +132,7 @@ const authenticateToken = (req, res, next) => {
     // but username still exists. Remap to preserve user session continuity.
     if (!existingUser && typeof user.username === 'string' && user.username.trim()) {
       existingUser = db
-        .prepare('SELECT id, username FROM users WHERE username = ?')
+        .prepare('SELECT id, username FROM users WHERE username = ? COLLATE NOCASE')
         .get(user.username.trim())
       if (existingUser) {
         console.warn(
@@ -162,12 +162,27 @@ app.post('/api/auth/signup', async (req, res) => {
       return res.status(400).json({ error: 'All fields are required' })
     }
 
+    const normalizedUsername = String(username).trim().toLowerCase()
+    const normalizedEmail = String(email).trim()
+
+    if (!normalizedUsername) {
+      return res.status(400).json({ error: 'Username is required' })
+    }
+
+    // Case-insensitive username uniqueness check for a clearer error message
+    const existing = db
+      .prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE LIMIT 1')
+      .get(normalizedUsername)
+    if (existing) {
+      return res.status(409).json({ error: 'Username already exists' })
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10)
 
     const stmt = db.prepare('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)')
-    const result = stmt.run(username, email, hashedPassword)
+    const result = stmt.run(normalizedUsername, normalizedEmail, hashedPassword)
 
-    const token = jwt.sign({ id: result.lastInsertRowid, username }, JWT_SECRET, {
+    const token = jwt.sign({ id: result.lastInsertRowid, username: normalizedUsername }, JWT_SECRET, {
       expiresIn: '7d',
     })
 
@@ -195,7 +210,10 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body
 
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username)
+    const normalizedUsername = String(username || '').trim()
+    const user = db
+      .prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE')
+      .get(normalizedUsername)
 
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ error: 'Invalid credentials' })

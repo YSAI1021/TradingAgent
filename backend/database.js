@@ -39,6 +39,9 @@ db.exec(`
     login_streak INTEGER DEFAULT 0
   );
 
+  -- Enforce case-insensitive uniqueness for usernames (allows login/signup without case sensitivity)
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(username COLLATE NOCASE);
+
   CREATE TABLE IF NOT EXISTS user_ai_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL UNIQUE,

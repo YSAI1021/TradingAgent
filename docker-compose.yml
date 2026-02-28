@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      # Persist SQLite DB in a named Docker volume
+      DB_PATH: "/data/trading_platform.db"
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:5173}"
+      JWT_SECRET: "${JWT_SECRET:-dev-secret-change-me}"
+      # Optional: set to enable AI features for the new `frontend/`
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+    volumes:
+      - backend-data:/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      # Browser will call the mapped host port (not the container network)
+      VITE_API_URL: "${VITE_API_URL:-http://localhost:3000}"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend-data:

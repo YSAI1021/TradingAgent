@@ -95,7 +95,9 @@ const sanitizeTickers = (tickers) => {
 }
 
 const ensureNewsBotUser = () => {
-  let newsUser = db.prepare('SELECT id FROM users WHERE username = ?').get(NEWS_BOT_USERNAME)
+  let newsUser = db
+    .prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE')
+    .get(NEWS_BOT_USERNAME)
   if (!newsUser) {
     const hashedPassword = bcrypt.hashSync('news-bot-system', 10)
     const result = db
