@@ -408,7 +408,7 @@ export const analyzeNewsSentiment = async (title, content, stockTicker = null, a
   try {
     const geminiApiKey = apiKey || process.env.GEMINI_API_KEY
     if (!geminiApiKey) {
-      return { sentiment: 'neutral', confidence: 0 }
+      return { sentiment: 'neutral', confidence: 0, reason: '' }
     }
 
     const userGenAI = new GoogleGenerativeAI(geminiApiKey)
@@ -422,13 +422,14 @@ Title: ${title}
 Content: ${content ? content.substring(0, 500) : title}
 
 Respond with ONLY a JSON object in this exact format (no markdown, no explanation):
-{"sentiment": "bullish" or "bearish" or "neutral", "confidence": 0.0 to 1.0}
+{"sentiment": "bullish" or "bearish" or "neutral", "confidence": 0.0 to 1.0, "reason": "one sentence explaining why this matters for investors"}
 
 Rules:
 - "bullish" = positive news that could drive stock price UP (good earnings, new products, partnerships, growth)
 - "bearish" = negative news that could drive stock price DOWN (losses, lawsuits, layoffs, recalls)
 - "neutral" = news with no clear positive or negative impact
-- confidence = how confident you are (0.5 = unsure, 1.0 = very confident)`
+- confidence = how confident you are (0.5 = unsure, 1.0 = very confident)
+- reason = a concise one-sentence explanation of why this news matters for the stock or portfolio (max 120 chars)`
 
     const result = await model.generateContent(prompt)
     const response = await result.response
@@ -449,18 +450,23 @@ Rules:
       // Validate confidence
       parsed.confidence = Math.max(0, Math.min(1, parseFloat(parsed.confidence) || 0.5))
 
+      // Validate reason
+      if (!parsed.reason || typeof parsed.reason !== 'string') {
+        parsed.reason = ''
+      }
+
       return parsed
     } catch (parseError) {
       console.error('Failed to parse sentiment response:', text)
       // Try to extract sentiment from text
       const lowerText = text.toLowerCase()
-      if (lowerText.includes('bullish')) return { sentiment: 'bullish', confidence: 0.6 }
-      if (lowerText.includes('bearish')) return { sentiment: 'bearish', confidence: 0.6 }
-      return { sentiment: 'neutral', confidence: 0.5 }
+      if (lowerText.includes('bullish')) return { sentiment: 'bullish', confidence: 0.6, reason: '' }
+      if (lowerText.includes('bearish')) return { sentiment: 'bearish', confidence: 0.6, reason: '' }
+      return { sentiment: 'neutral', confidence: 0.5, reason: '' }
     }
   } catch (error) {
     console.error('Sentiment analysis error:', error)
-    return { sentiment: 'neutral', confidence: 0 }
+    return { sentiment: 'neutral', confidence: 0, reason: '' }
   }
 }
 

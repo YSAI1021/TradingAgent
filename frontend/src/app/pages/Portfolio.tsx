@@ -297,15 +297,20 @@ export function Portfolio() {
 
   const chartYTicks = useMemo(() => {
     if (!chartData || chartData.length === 0) return [];
-    const tickCount = 5;
     if (chartMinValue === chartMaxValue) return [];
-    const step = (chartMaxValue - chartMinValue) / (tickCount - 1);
+    const range = chartMaxValue - chartMinValue;
+    // Pick a nice step: 1, 2, 5, 10, 20, 50, ... scaled to give ~4 ticks
+    const rawStep = range / 4;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const norm = rawStep / mag;
+    const niceNorm = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
+    const niceStep = niceNorm * mag;
+    const start = Math.ceil(chartMinValue / niceStep) * niceStep;
     const ticks: number[] = [];
-    for (let i = 0; i < tickCount; i++)
-      ticks.push(Math.round(chartMinValue + step * i));
-    return ticks.filter(
-      (t) => t !== Math.round(chartMinValue) && t !== Math.round(chartMaxValue),
-    );
+    for (let v = start; v < chartMaxValue; v += niceStep) {
+      ticks.push(Math.round(v));
+    }
+    return ticks;
   }, [chartData, chartMinValue, chartMaxValue]);
   const [benchmarkPct, setBenchmarkPct] = useState<number | null>(null);
 
@@ -1169,8 +1174,9 @@ export function Portfolio() {
                     >
                       <p className="text-xs font-medium text-blue-800 mb-1">AI Sentiment Analysis</p>
                       <p className="text-xs text-gray-600">
-                        Why it matters: this update affects exposure and near-term
-                        decision framing.
+                        {item.sentiment_reason
+                          ? item.sentiment_reason
+                          : "Tap to ask Copilot for a detailed analysis of this news."}
                       </p>
                     </div>
                   </div>

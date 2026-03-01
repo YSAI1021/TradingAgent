@@ -280,6 +280,7 @@ const migrateDatabase = () => {
     addPostColumnIfMissing('news_image_url', 'TEXT')
     addPostColumnIfMissing('sentiment', 'TEXT DEFAULT "neutral"')
     addPostColumnIfMissing('sentiment_confidence', 'REAL DEFAULT 0')
+    addPostColumnIfMissing('sentiment_reason', 'TEXT DEFAULT ""')
 
     // Ensure new tables exist for onboarding and thesis persistence in older DBs.
     db.exec(`

@@ -471,7 +471,7 @@ app.post('/api/news/update-sentiment', authenticateToken, async (req, res) => {
     }
 
     const updateStmt = db.prepare(
-      'UPDATE posts SET sentiment = ?, sentiment_confidence = ? WHERE id = ?'
+      'UPDATE posts SET sentiment = ?, sentiment_confidence = ?, sentiment_reason = ? WHERE id = ?'
     )
 
     let updatedCount = 0
@@ -488,7 +488,7 @@ app.post('/api/news/update-sentiment', authenticateToken, async (req, res) => {
         const analysis = await analyzeNewsSentiment(news.title, news.content, news.stock_ticker, apiKey)
 
         // Update database with sentiment (even if neutral)
-        updateStmt.run(analysis.sentiment, analysis.confidence, news.id)
+        updateStmt.run(analysis.sentiment, analysis.confidence, analysis.reason || '', news.id)
 
         if (analysis.sentiment && analysis.sentiment !== 'neutral') {
           updatedCount++
@@ -2357,22 +2357,8 @@ app.get('/api/thesis/dashboard-stats', authenticateToken, (req, res) => {
       )
       .all(userId, sinceStr)
 
-    let avgCoolingHours = 0
-    if (panicPauseEvents.length > 0) {
-      // Estimate cooling period as average gap between panic_pause events (or 24h default)
-      if (panicPauseEvents.length >= 2) {
-        let totalGap = 0
-        for (let i = 0; i < panicPauseEvents.length - 1; i++) {
-          const gap =
-            new Date(panicPauseEvents[i].created_at).getTime() -
-            new Date(panicPauseEvents[i + 1].created_at).getTime()
-          totalGap += gap
-        }
-        avgCoolingHours = Math.round(totalGap / (panicPauseEvents.length - 1) / (1000 * 60 * 60))
-      } else {
-        avgCoolingHours = 24
-      }
-    }
+    // Default cooling-off period per pause is 24h
+    const avgCoolingHours = panicPauseEvents.length > 0 ? 24 : 0
 
     res.json({
       ruleAdherence: totalDecisions > 0 ? Math.round((honored / totalDecisions) * 100) : 0,
@@ -2435,21 +2421,21 @@ app.post('/api/thesis/decision-events/seed', authenticateToken, (req, res) => {
 
     const events = [
       { type: 'rule_honored', desc: 'Held position through volatility per Rule #1', daysAgo: 2 },
+      { type: 'rule_override', desc: 'Sold high-beta position before stop trigger during sharp drawdown', daysAgo: 4 },
       { type: 'rule_honored', desc: 'Rebalanced tech allocation below 60% threshold', daysAgo: 5 },
+      { type: 'rule_override', desc: 'Added to position during VIX > 20 despite pause rule', daysAgo: 7 },
       { type: 'rule_honored', desc: 'Waited 24h before buying during VIX spike', daysAgo: 8 },
       { type: 'rule_honored', desc: 'Trimmed concentrated position to target weight', daysAgo: 12 },
+      { type: 'panic_pause', desc: 'Market dropped 6.2% — paused for 48h', daysAgo: 14 },
       { type: 'rule_honored', desc: 'Logged rationale before executing trade', daysAgo: 15 },
       { type: 'rule_honored', desc: 'Paused new buys during elevated macro risk', daysAgo: 20 },
       { type: 'rule_honored', desc: 'Held through earnings despite pre-announcement anxiety', daysAgo: 25 },
+      { type: 'panic_pause', desc: 'Flash crash scare — activated cooling-off period', daysAgo: 28 },
       { type: 'rule_honored', desc: 'Reduced correlated positions per concentration rule', daysAgo: 30 },
       { type: 'rule_honored', desc: 'Followed stop-loss discipline on losing position', daysAgo: 35 },
       { type: 'rule_honored', desc: 'Reviewed thesis before adding to winner', daysAgo: 40 },
-      { type: 'rule_honored', desc: 'Maintained cash buffer during drawdown', daysAgo: 50 },
-      { type: 'rule_override', desc: 'Sold high-beta position before stop trigger during sharp drawdown', daysAgo: 24 },
-      { type: 'rule_override', desc: 'Added to position during VIX > 20 despite pause rule', daysAgo: 45 },
-      { type: 'panic_pause', desc: 'Market dropped 6.2% — paused for 48h', daysAgo: 14 },
-      { type: 'panic_pause', desc: 'Flash crash scare — activated cooling-off period', daysAgo: 28 },
       { type: 'panic_pause', desc: 'Earnings miss triggered anxiety — paused trading', daysAgo: 42 },
+      { type: 'rule_honored', desc: 'Maintained cash buffer during drawdown', daysAgo: 50 },
       { type: 'panic_pause', desc: 'Portfolio drawdown 4% — took 24h break', daysAgo: 60 },
     ]
 
@@ -2593,7 +2579,7 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
 
         // Analyze sentiment for news that doesn't have it yet (using user's API key)
         const updateSentimentStmt = db.prepare(
-          'UPDATE posts SET sentiment = ?, sentiment_confidence = ? WHERE id = ?'
+          'UPDATE posts SET sentiment = ?, sentiment_confidence = ?, sentiment_reason = ? WHERE id = ?'
         )
 
         for (let i = 0; i < relevantNews.length; i++) {
@@ -2609,11 +2595,12 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
               )
 
               // Update in database
-              updateSentimentStmt.run(analysis.sentiment, analysis.confidence, news.id)
+              updateSentimentStmt.run(analysis.sentiment, analysis.confidence, analysis.reason || '', news.id)
 
               // Update in current array for response
               relevantNews[i].sentiment = analysis.sentiment
               relevantNews[i].sentiment_confidence = analysis.confidence
+              relevantNews[i].sentiment_reason = analysis.reason || ''
 
               console.log(`  -> ${analysis.sentiment} (${(analysis.confidence * 100).toFixed(0)}%)`)
             } catch (err) {
