@@ -133,27 +133,66 @@ function PrimaryButton({
       onClick={onClick}
       disabled={disabled}
       style={{
-        width: "100%",
         background: disabled ? C.greenLight : C.greenDark,
         color: "#fff",
         border: "none",
         borderRadius: 100,
-        padding: "17px 32px",
+        padding: "11px 28px",
         fontFamily: "inherit",
-        fontSize: 15,
+        fontSize: 14,
         fontWeight: 500,
         cursor: disabled ? "not-allowed" : "pointer",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 8,
-        marginTop: 8,
         opacity: disabled ? 0.7 : 1,
         transition: "all 0.2s",
+        whiteSpace: "nowrap",
       }}
     >
       {label}
     </button>
+  );
+}
+
+function StepFooter({
+  onContinue,
+  onSkip,
+  continueLabel = "Continue →",
+  continueDisabled,
+}: {
+  onContinue: () => void;
+  onSkip?: () => void;
+  continueLabel?: string;
+  continueDisabled?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        gap: 20,
+        marginTop: 8,
+        width: "100%",
+      }}
+    >
+      {onSkip && (
+        <span
+          onClick={onSkip}
+          style={{
+            fontSize: 13.5,
+            color: C.textMuted,
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          Skip
+        </span>
+      )}
+      <PrimaryButton
+        label={continueLabel}
+        onClick={onContinue}
+        disabled={continueDisabled}
+      />
+    </div>
   );
 }
 
@@ -166,32 +205,32 @@ export function Onboarding() {
   const [error, setError] = useState("");
   const [step, setStep] = useState(1);
   // Step 1
-  const [investorType, setInvestorType] = useState<string>("");
+  const [investorType, setInvestorType] = useState<string>("Self-directed");
   // Step 2
-  const [assetTypes, setAssetTypes] = useState<string[]>([]);
-  const [reviewFrequency, setReviewFrequency] = useState<string>("");
-  const [investmentHorizon, setInvestmentHorizon] = useState<string>("");
-  const [strategy, setStrategy] = useState<string>("");
+  const [assetTypes, setAssetTypes] = useState<string[]>(["Stocks"]);
+  const [reviewFrequency, setReviewFrequency] = useState<string>("A few times a week");
+  const [investmentHorizon, setInvestmentHorizon] = useState<string>("3–10 years");
+  const [strategy, setStrategy] = useState<string>("Selective stock picking");
   // Step 3
-  const [marketDropReaction, setMarketDropReaction] = useState<string>("");
-  const [biggestEnemy, setBiggestEnemy] = useState<string>("");
-  const [decisionTiming, setDecisionTiming] = useState<string>("");
+  const [marketDropReaction, setMarketDropReaction] = useState<string>("Feel anxious but hold");
+  const [biggestEnemy, setBiggestEnemy] = useState<string>("Panic selling");
+  const [decisionTiming, setDecisionTiming] = useState<string>("After a few hours of thinking");
   const [investmentAnchor, setInvestmentAnchor] = useState("");
 
   useEffect(() => {
     const localRaw =
       typeof window !== "undefined" ? window.localStorage.getItem(ONBOARDING_PROFILE_STORAGE_KEY) : null;
     const applyProfile = (profile: Partial<OnboardingProfile>) => {
-      setInvestorType(profile.investorType || "");
-      setAssetTypes(Array.isArray(profile.assetTypes) ? profile.assetTypes : []);
+      setInvestorType(profile.investorType || "Self-directed");
+      setAssetTypes(Array.isArray(profile.assetTypes) && profile.assetTypes.length > 0 ? profile.assetTypes : ["Stocks"]);
       // riskTolerance stored reviewFrequency, decisionHorizon stored investmentHorizon, marketFocus stored strategy
-      setReviewFrequency(profile.riskTolerance || "");
-      setInvestmentHorizon(profile.decisionHorizon || "");
-      setStrategy(profile.marketFocus || "");
+      setReviewFrequency(profile.riskTolerance || "A few times a week");
+      setInvestmentHorizon(profile.decisionHorizon || "3–10 years");
+      setStrategy(profile.marketFocus || "Selective stock picking");
       const flags = Array.isArray(profile.baselineFlags) ? profile.baselineFlags : [];
-      setMarketDropReaction(flags[0] || "");
-      setBiggestEnemy(flags[1] || "");
-      setDecisionTiming(flags[2] || "");
+      setMarketDropReaction(flags[0] || "Feel anxious but hold");
+      setBiggestEnemy(flags[1] || "Panic selling");
+      setDecisionTiming(flags[2] || "After a few hours of thinking");
       setInvestmentAnchor(profile.investmentAnchor || "");
     };
 
@@ -352,7 +391,7 @@ export function Onboarding() {
             letterSpacing: "-0.3px",
           }}
         >
-          thesis.
+          My Investment Thesis
         </span>
       </nav>
 
@@ -407,7 +446,7 @@ export function Onboarding() {
                   marginBottom: 40,
                 }}
               >
-                This helps us calibrate your rules and guardrails. No judgment — just context.
+                This helps us calibrate your rules and guardrails.<br />No judgment — just context.
               </p>
 
               <div
@@ -448,7 +487,7 @@ export function Onboarding() {
                 })}
               </div>
 
-              <PrimaryButton label="Continue →" onClick={() => setStep(2)} disabled={!investorType} />
+              <StepFooter onContinue={() => setStep(2)} onSkip={() => setStep(2)} />
             </>
           )}
 
@@ -467,7 +506,7 @@ export function Onboarding() {
                   marginBottom: 40,
                 }}
               >
-                Select what you currently invest in or plan to. This shapes how we interpret your decisions.
+                Select what you currently invest in or plan to.<br />This shapes how we interpret your decisions.
               </p>
 
               {/* Asset class label */}
@@ -547,7 +586,7 @@ export function Onboarding() {
                 onChange={setStrategy}
               />
 
-              <PrimaryButton label="Continue →" onClick={() => setStep(3)} />
+              <StepFooter onContinue={() => setStep(3)} onSkip={() => setStep(3)} />
             </>
           )}
 
@@ -566,7 +605,7 @@ export function Onboarding() {
                   marginBottom: 40,
                 }}
               >
-                Quick questions to build your behavioral profile. There are no wrong answers.
+                Quick questions to build your behavioral profile.<br />There are no wrong answers.
               </p>
 
               <PillGroup
@@ -617,7 +656,7 @@ export function Onboarding() {
                 />
               </div>
 
-              <PrimaryButton label="Continue →" onClick={() => setStep(4)} />
+              <StepFooter onContinue={() => setStep(4)} onSkip={() => setStep(4)} />
             </>
           )}
 
@@ -637,7 +676,7 @@ export function Onboarding() {
                   marginBottom: 40,
                 }}
               >
-                This is version 1.0 — a living document. As you use Arcis, it will evolve with you.
+                This is version 1.0 — a living document.<br />As you use My Investment Thesis, it will evolve with you.
               </p>
 
               {/* Investor Profile card */}
@@ -855,10 +894,10 @@ export function Onboarding() {
                 </div>
               </div>
 
-              <PrimaryButton
-                label={saving ? "Saving..." : "Build my first rule →"}
-                onClick={() => void completeOnboarding()}
-                disabled={saving}
+              <StepFooter
+                continueLabel={saving ? "Saving..." : "Build my first rule →"}
+                onContinue={() => void completeOnboarding()}
+                continueDisabled={saving}
               />
             </>
           )}
