@@ -601,6 +601,7 @@ export interface NewsArticle extends Post {
   news_published_at: string;
   sentiment?: "bullish" | "bearish" | "neutral" | string;
   sentiment_confidence?: number;
+  sentiment_reason?: string;
 }
 
 export async function fetchNews(ticker?: string): Promise<NewsArticle[]> {

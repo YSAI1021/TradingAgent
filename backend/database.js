@@ -282,6 +282,7 @@ const migrateDatabase = () => {
     addPostColumnIfMissing('news_image_url', 'TEXT')
     addPostColumnIfMissing('sentiment', 'TEXT DEFAULT "neutral"')
     addPostColumnIfMissing('sentiment_confidence', 'REAL DEFAULT 0')
+    addPostColumnIfMissing('sentiment_reason', 'TEXT DEFAULT ""')
 
     // Add new columns to thesis_equities when missing (older DBs)
     const thesisEquityColumns = db.prepare('PRAGMA table_info(thesis_equities)').all()
