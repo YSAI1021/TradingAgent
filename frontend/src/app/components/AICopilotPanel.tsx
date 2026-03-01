@@ -83,7 +83,7 @@ function sanitizeAssistantText(text: string): string {
 
 function formatAssistantReply(rawText: string): string {
   const cleaned = sanitizeAssistantText(rawText);
-  if (!cleaned) return "Summary: No response generated.\n\nTL;DR: Please retry.";
+  if (!cleaned) return "No response generated. Please retry.";
 
   const sentenceList = cleaned
     .replace(/\n+/g, " ")
@@ -107,9 +107,7 @@ function formatAssistantReply(rawText: string): string {
     ].join("\n");
   }
 
-  if (/(^|\n)\s*(TL;DR|Conclusion)\s*:/i.test(formatted)) return formatted;
-  const tldr = firstSentence.length > 160 ? `${firstSentence.slice(0, 157)}...` : firstSentence;
-  return `${formatted}\n\nTL;DR: ${tldr}`;
+  return formatted;
 }
 
 export function AICopilotPanel() {
