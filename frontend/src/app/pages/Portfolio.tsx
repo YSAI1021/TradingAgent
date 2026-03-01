@@ -823,7 +823,7 @@ export function Portfolio() {
                         setAddTransactionOpen(true);
                       }}
                     >
-                      Add
+                      Act
                     </Button>
                     <Button
                       size="sm"
@@ -968,7 +968,7 @@ export function Portfolio() {
                               setAddTransactionOpen(true);
                             }}
                           >
-                            Add
+                            Act
                           </Button>
                           <Button
                             size="sm"
