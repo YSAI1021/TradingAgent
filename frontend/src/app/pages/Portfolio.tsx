@@ -213,11 +213,12 @@ export function Portfolio() {
     const loadSnapshots = async () => {
       setLoadingSnapshots(true);
       try {
-        let data = await fetchPortfolioSnapshots(token, 3650);
-        if (data.length === 0) {
+        // Always regenerate when holdings exist so adding/removing a holding
+        // immediately updates the chart with the full corrected history.
+        if (holdings.length > 0) {
           await generateHistoricalSnapshots(token).catch(() => undefined);
-          data = await fetchPortfolioSnapshots(token, 3650);
         }
+        const data = await fetchPortfolioSnapshots(token, 3650);
         if (mounted) setSnapshots(data);
       } catch (error) {
         console.error("Failed to load portfolio snapshots:", error);

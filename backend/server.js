@@ -1170,15 +1170,13 @@ app.get('/api/portfolio/snapshots', authenticateToken, (req, res) => {
 // Generate historical snapshots based on transactions
 app.post('/api/portfolio/generate-historical-snapshots', authenticateToken, async (req, res) => {
   try {
-    // Get all transactions for this user
+    // Get all transactions for this user ordered chronologically
     const transactions = db
       .prepare(
-        `
-      SELECT symbol, transaction_type, shares, price_per_share, transaction_date
-      FROM portfolio_transactions
-      WHERE user_id = ?
-      ORDER BY transaction_date ASC
-    `
+        `SELECT symbol, transaction_type, shares, price_per_share, transaction_date
+         FROM portfolio_transactions
+         WHERE user_id = ?
+         ORDER BY transaction_date ASC`
       )
       .all(req.user.id)
 
@@ -1186,45 +1184,107 @@ app.post('/api/portfolio/generate-historical-snapshots', authenticateToken, asyn
       return res.json({ message: 'No transactions found', snapshots_created: 0 })
     }
 
-    // Get unique dates
-    const uniqueDates = [...new Set(transactions.map((t) => t.transaction_date.split(' ')[0]))]
+    // Date range: first transaction → today, capped at 2 years back
+    const firstTxDateStr = transactions[0].transaction_date.split(' ')[0]
+    const today = new Date()
+    const todayStr = today.toISOString().split('T')[0]
+    const twoYearsAgo = new Date(today)
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2)
+    const startDate =
+      new Date(firstTxDateStr + 'T00:00:00Z') > twoYearsAgo
+        ? new Date(firstTxDateStr + 'T00:00:00Z')
+        : twoYearsAgo
+    const startStr = startDate.toISOString().split('T')[0]
 
-    // Sort dates
-    uniqueDates.sort()
+    // Get all unique symbols
+    const allSymbols = [...new Set(transactions.map((t) => t.symbol))]
+
+    // Fetch full price history for every symbol in one API call each
+    const priceCache = {} // { symbol: { 'YYYY-MM-DD': price } }
+    const period1 = Math.floor(startDate.getTime() / 1000) - 86400 // one day before for coverage
+    const period2 = Math.floor(Date.now() / 1000)
+
+    for (const symbol of allSymbols) {
+      priceCache[symbol] = {}
+      try {
+        const marketSymbol = resolveMarketDataSymbol(symbol)
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${marketSymbol}?interval=1d&period1=${period1}&period2=${period2}`
+        const response = await fetch(url)
+        const data = await response.json()
+        if (data.chart && data.chart.result && data.chart.result[0]) {
+          const result = data.chart.result[0]
+          const timestamps = result.timestamp || []
+          const closes =
+            result.indicators?.adjclose?.[0]?.adjclose ||
+            result.indicators?.quote?.[0]?.close ||
+            []
+          timestamps.forEach((ts, i) => {
+            if (closes[i] != null) {
+              const d = new Date(ts * 1000).toISOString().split('T')[0]
+              priceCache[symbol][d] = closes[i]
+            }
+          })
+        }
+      } catch (err) {
+        console.error(`Error fetching history for ${symbol}:`, err)
+      }
+    }
+
+    // Lookup: find closest prior trading price (handles weekends/holidays, up to 5 days back)
+    const getPriceOnDate = (symbol, dateStr, fallback) => {
+      const cache = priceCache[symbol] || {}
+      const base = new Date(dateStr + 'T00:00:00Z')
+      for (let i = 0; i <= 5; i++) {
+        const key = new Date(base.getTime() - i * 86400000).toISOString().split('T')[0]
+        if (cache[key] != null) return cache[key]
+      }
+      return fallback
+    }
+
+    // Build list of all weekdays from startStr to today
+    const dates = []
+    const cur = new Date(startStr + 'T00:00:00Z')
+    const endTs = new Date(todayStr + 'T00:00:00Z')
+    while (cur <= endTs) {
+      const dow = cur.getUTCDay()
+      if (dow !== 0 && dow !== 6) dates.push(cur.toISOString().split('T')[0])
+      cur.setUTCDate(cur.getUTCDate() + 1)
+    }
+
+    // Wipe existing snapshots and regenerate cleanly
+    db.prepare('DELETE FROM daily_portfolio_snapshots WHERE user_id = ?').run(req.user.id)
+
+    const insertStmt = db.prepare(`
+      INSERT INTO daily_portfolio_snapshots
+      (user_id, snapshot_date, total_value, total_cost, daily_return, portfolio_data)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
 
     let snapshotsCreated = 0
 
-    // For each date, calculate portfolio state at end of that day
-    for (const date of uniqueDates) {
-      // Get all transactions up to and including this date
-      const txUpToDate = transactions.filter((tx) => {
-        const txDate = tx.transaction_date.split(' ')[0]
-        return txDate <= date
-      })
+    for (const date of dates) {
+      // Compute holdings as of end of this day
+      const txUpToDate = transactions.filter((tx) => tx.transaction_date.split(' ')[0] <= date)
+      if (txUpToDate.length === 0) continue
 
-      // Calculate holdings
-      const holdings = {}
+      const holdingsMap = {}
       txUpToDate.forEach((tx) => {
-        if (!holdings[tx.symbol]) {
-          holdings[tx.symbol] = { totalShares: 0, totalCost: 0 }
-        }
-
+        if (!holdingsMap[tx.symbol]) holdingsMap[tx.symbol] = { totalShares: 0, totalCost: 0 }
         if (tx.transaction_type === 'buy') {
-          holdings[tx.symbol].totalShares += tx.shares
-          holdings[tx.symbol].totalCost += tx.shares * tx.price_per_share
+          holdingsMap[tx.symbol].totalShares += tx.shares
+          holdingsMap[tx.symbol].totalCost += tx.shares * tx.price_per_share
         } else if (tx.transaction_type === 'sell') {
           const avgCost =
-            holdings[tx.symbol].totalShares > 0
-              ? holdings[tx.symbol].totalCost / holdings[tx.symbol].totalShares
+            holdingsMap[tx.symbol].totalShares > 0
+              ? holdingsMap[tx.symbol].totalCost / holdingsMap[tx.symbol].totalShares
               : 0
-          holdings[tx.symbol].totalShares -= tx.shares
-          holdings[tx.symbol].totalCost -= tx.shares * avgCost
+          holdingsMap[tx.symbol].totalShares -= tx.shares
+          holdingsMap[tx.symbol].totalCost -= tx.shares * avgCost
         }
       })
 
-      // Filter positive holdings
-      const portfolio = Object.entries(holdings)
-        .filter(([_, h]) => h.totalShares > 0)
+      const portfolio = Object.entries(holdingsMap)
+        .filter(([, h]) => h.totalShares > 0.0001)
         .map(([symbol, h]) => ({
           symbol,
           shares: h.totalShares,
@@ -1233,89 +1293,36 @@ app.post('/api/portfolio/generate-historical-snapshots', authenticateToken, asyn
 
       if (portfolio.length === 0) continue
 
-      // Fetch historical prices for each symbol at the snapshot date
       let totalValue = 0
       let totalCost = 0
-
       const portfolioData = []
 
-      // Build period1/period2 for the snapshot date (start of day → end of day)
-      const snapshotStart = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000)
-      const snapshotEnd = snapshotStart + 86400 // +1 day
-
       for (const holding of portfolio) {
-        try {
-          const marketSymbol = resolveMarketDataSymbol(holding.symbol)
-          // Fetch historical price at the snapshot date
-          const response = await fetch(
-            `https://query1.finance.yahoo.com/v8/finance/chart/${marketSymbol}?interval=1d&period1=${snapshotStart}&period2=${snapshotEnd}`
-          )
-          const data = await response.json()
-
-          let currentPrice = holding.averageCost // fallback to avg cost
-
-          if (data.chart && data.chart.result && data.chart.result[0]) {
-            const result = data.chart.result[0]
-            // Use the close price from historical data, falling back to regularMarketPrice
-            const quotes = result.indicators?.quote?.[0]
-            if (quotes?.close?.length > 0 && quotes.close[0] != null) {
-              currentPrice = quotes.close[0]
-            } else {
-              currentPrice = result.meta.regularMarketPrice || holding.averageCost
-            }
-          }
-
-          const value = holding.shares * currentPrice
-          const cost = holding.shares * holding.averageCost
-
-          totalValue += value
-          totalCost += cost
-
-          portfolioData.push({
-            symbol: holding.symbol,
-            shares: holding.shares,
-            averageCost: holding.averageCost,
-            currentPrice: currentPrice,
-          })
-        } catch (err) {
-          console.error(`Error fetching price for ${holding.symbol}:`, err)
-          // Use average cost as fallback
-          const cost = holding.shares * holding.averageCost
-          totalValue += cost
-          totalCost += cost
-
-          portfolioData.push({
-            symbol: holding.symbol,
-            shares: holding.shares,
-            averageCost: holding.averageCost,
-            currentPrice: holding.averageCost,
-          })
-        }
+        const currentPrice = getPriceOnDate(holding.symbol, date, holding.averageCost)
+        totalValue += holding.shares * currentPrice
+        totalCost += holding.shares * holding.averageCost
+        portfolioData.push({
+          symbol: holding.symbol,
+          shares: holding.shares,
+          averageCost: holding.averageCost,
+          currentPrice,
+        })
       }
 
-      const dailyReturn = totalValue - totalCost
-
-      // Delete existing snapshot for this date
-      db.prepare(
-        'DELETE FROM daily_portfolio_snapshots WHERE user_id = ? AND snapshot_date = ?'
-      ).run(req.user.id, date)
-
-      // Insert snapshot
-      const stmt = db.prepare(`
-        INSERT INTO daily_portfolio_snapshots
-        (user_id, snapshot_date, total_value, total_cost, daily_return, portfolio_data)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-
-      stmt.run(req.user.id, date, totalValue, totalCost, dailyReturn, JSON.stringify(portfolioData))
-
+      insertStmt.run(
+        req.user.id,
+        date,
+        totalValue,
+        totalCost,
+        totalValue - totalCost,
+        JSON.stringify(portfolioData)
+      )
       snapshotsCreated++
     }
 
     res.json({
       message: 'Historical snapshots generated',
       snapshots_created: snapshotsCreated,
-      dates: uniqueDates,
     })
   } catch (error) {
     console.error('Error generating historical snapshots:', error)
