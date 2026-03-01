@@ -1233,18 +1233,22 @@ app.post('/api/portfolio/generate-historical-snapshots', authenticateToken, asyn
 
       if (portfolio.length === 0) continue
 
-      // Fetch current prices for all symbols
+      // Fetch historical prices for each symbol at the snapshot date
       let totalValue = 0
       let totalCost = 0
 
       const portfolioData = []
 
+      // Build period1/period2 for the snapshot date (start of day → end of day)
+      const snapshotStart = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000)
+      const snapshotEnd = snapshotStart + 86400 // +1 day
+
       for (const holding of portfolio) {
         try {
           const marketSymbol = resolveMarketDataSymbol(holding.symbol)
-          // Fetch price
+          // Fetch historical price at the snapshot date
           const response = await fetch(
-            `https://query1.finance.yahoo.com/v8/finance/chart/${marketSymbol}?interval=1d&range=1d`
+            `https://query1.finance.yahoo.com/v8/finance/chart/${marketSymbol}?interval=1d&period1=${snapshotStart}&period2=${snapshotEnd}`
           )
           const data = await response.json()
 
@@ -1252,7 +1256,13 @@ app.post('/api/portfolio/generate-historical-snapshots', authenticateToken, asyn
 
           if (data.chart && data.chart.result && data.chart.result[0]) {
             const result = data.chart.result[0]
-            currentPrice = result.meta.regularMarketPrice || holding.averageCost
+            // Use the close price from historical data, falling back to regularMarketPrice
+            const quotes = result.indicators?.quote?.[0]
+            if (quotes?.close?.length > 0 && quotes.close[0] != null) {
+              currentPrice = quotes.close[0]
+            } else {
+              currentPrice = result.meta.regularMarketPrice || holding.averageCost
+            }
           }
 
           const value = holding.shares * currentPrice

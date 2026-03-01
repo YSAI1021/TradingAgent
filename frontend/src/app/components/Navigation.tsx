@@ -33,8 +33,8 @@ export function Navigation() {
     <nav className="w-64 bg-white border-r border-gray-200 flex flex-col">
       {/* Logo */}
       <div className="p-6 border-b border-gray-200">
-        <h1 className="text-2xl font-semibold text-gray-900">My Investment Thesis</h1>
-        <p className="text-sm text-gray-500 mt-1">Decision Intelligence Layer</p>
+        <h1 className="text-lg font-semibold text-gray-900 whitespace-nowrap">My Investment Thesis</h1>
+        <p className="text-sm text-gray-500 mt-1">Your Decision Intelligence Layer</p>
       </div>
 
       {/* Navigation Links */}

@@ -4,8 +4,6 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
-  MessageCircleQuestion,
   Plus,
   Search,
   Sparkles,
@@ -33,7 +31,6 @@ import {
   PortfolioSnapshot,
 } from "@/app/services/api";
 import { AddTransactionModal } from "@/app/components/AddTransactionModal";
-import { PortfolioPieChart } from "@/app/components/PortfolioPieChart";
 import SourcesModal from "@/app/components/SourcesModal";
 import { TransactionHistoryModal } from "@/app/components/TransactionHistoryModal";
 import { Badge } from "@/app/components/ui/badge";
@@ -155,7 +152,6 @@ export function Portfolio() {
   const [loadingNews, setLoadingNews] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [toolboxCollapsed, setToolboxCollapsed] = useState(false);
-  const [showAllocation, setShowAllocation] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [newsCollapsed, setNewsCollapsed] = useState(false);
   const [alertsCollapsed, setAlertsCollapsed] = useState(false);
@@ -533,7 +529,7 @@ export function Portfolio() {
       {
         id: "earnings_week",
         title: "Earnings Week Alert",
-        badgeText: "MACRO",
+        badgeText: "EARNINGS",
         // purple (use purple for earnings)
         badgeClass: "bg-purple-100 text-purple-800",
         time: "5h ago",
@@ -624,12 +620,11 @@ export function Portfolio() {
               {CHART_TIMEFRAMES.map((tf) => (
                 <Button
                   key={tf.id}
-                  variant={!showMap && timeframe.id === tf.id && !showAllocation ? "secondary" : "ghost"}
+                  variant={!showMap && timeframe.id === tf.id ? "secondary" : "ghost"}
                   size="sm"
                   className="h-7 px-2 text-xs"
                   onClick={() => {
                     setTimeframe(tf);
-                    setShowAllocation(false);
                     setShowMap(false);
                   }}
                 >
@@ -637,22 +632,12 @@ export function Portfolio() {
                 </Button>
               ))}
               <Button
-                key="allocation"
-                variant={showAllocation ? "secondary" : "ghost"}
-                size="sm"
-                className="h-7 px-2 text-xs"
-                onClick={() => { setShowAllocation((p) => !p); setShowMap(false); }}
-              >
-                Allocation
-              </Button>
-              <Button
                 key="map"
                 variant={showMap ? "secondary" : "ghost"}
                 size="sm"
                 className="h-7 px-2 text-xs"
                 onClick={() => {
                   setShowMap((p) => !p);
-                  setShowAllocation(false);
                 }}
               >
                 MAP
@@ -704,10 +689,6 @@ export function Portfolio() {
                   <Tooltip content={<TreemapTooltip />} />
                 </Treemap>
               </ResponsiveContainer>
-            </div>
-          ) : showAllocation ? (
-            <div className="h-[320px]">
-              <PortfolioPieChart holdings={holdings} />
             </div>
           ) : (
             <div className="h-[320px]">
@@ -1119,8 +1100,7 @@ export function Portfolio() {
                   className="h-6 px-2 text-xs"
                   onClick={() => setShowSources(true)}
                 >
-                  <ExternalLink className="w-3 h-3 mr-1" />
-                  Sources
+                  More
                 </Button>
               </div>
             </CardTitle>
@@ -1131,96 +1111,69 @@ export function Portfolio() {
                 Analyzing portfolio news...
               </p>
             ) : visibleNews.length > 0 ? (
-              newsCollapsed ? (
-                (() => {
-                  const item = visibleNews[0];
-                  return (
-                    <div
-                      key={`${item.id || item.news_url}-${item.stock_ticker}`}
-                      className="w-full text-left p-3 rounded-lg bg-white border border-blue-500/20 hover:border-blue-300 transition-colors"
+              (newsCollapsed ? visibleNews.slice(0, 1) : visibleNews).map((item) => (
+                  <div
+                    key={`${item.id || item.news_url}-${item.stock_ticker}`}
+                    className="w-full rounded-lg bg-white border border-blue-500/20 transition-colors flex"
+                  >
+                    {/* Left side - opens external URL */}
+                    <a
+                      href={item.news_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex-1 p-3 hover:bg-gray-50 cursor-pointer rounded-l-lg border-r border-gray-100 no-underline"
                     >
-                      <div className="flex items-center justify-between">
-                        <p className="font-medium text-gray-900">{item.title}</p>
-                        <Badge variant="outline" className="text-xs">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <Badge
+                          className={`text-[10px] border-0 ${
+                            item.sentiment === "bullish"
+                              ? "bg-green-100 text-green-800"
+                              : item.sentiment === "bearish"
+                                ? "bg-red-100 text-red-800"
+                                : "bg-gray-100 text-gray-700"
+                          }`}
+                        >
+                          {item.sentiment === "bullish"
+                            ? "Bullish"
+                            : item.sentiment === "bearish"
+                              ? "Bearish"
+                              : "Neutral"}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
                           {item.stock_ticker || "Portfolio"}
                         </Badge>
                       </div>
-                      <p className="text-sm text-gray-600 mt-1">
+                      <p className="font-medium text-gray-900 text-sm">{item.title}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {item.news_source || "Source"} • {item.news_published_at
+                          ? (() => {
+                              const diff = Date.now() - new Date(item.news_published_at).getTime();
+                              const hours = Math.floor(diff / 3600000);
+                              if (hours < 1) return "just now";
+                              if (hours < 24) return `${hours}h ago`;
+                              return `${Math.floor(hours / 24)}d ago`;
+                            })()
+                          : ""}
+                      </p>
+                    </a>
+                    {/* Right side - sends to Copilot */}
+                    <div
+                      className="flex-1 p-3 hover:bg-blue-50 cursor-pointer rounded-r-lg"
+                      onClick={() =>
+                        sendPrompt(
+                          `Analyze this news for my holdings: ${item.title} (${item.stock_ticker || "portfolio"})`,
+                          { submit: true },
+                        )
+                      }
+                    >
+                      <p className="text-xs font-medium text-blue-800 mb-1">AI Sentiment Analysis</p>
+                      <p className="text-xs text-gray-600">
                         Why it matters: this update affects exposure and near-term
                         decision framing.
                       </p>
-                      <div className="mt-3 flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs"
-                          onClick={() =>
-                            sendPrompt(
-                              `Analyze this news for my holdings: ${item.title} (${item.stock_ticker || "portfolio"})`,
-                              { submit: true },
-                            )
-                          }
-                        >
-                          <MessageCircleQuestion className="w-3 h-3 mr-1" />
-                          Ask
-                        </Button>
-                        <a
-                          href={item.news_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                        >
-                          <ExternalLink className="w-3 h-3 mr-1" />
-                          Source
-                        </a>
-                      </div>
-                    </div>
-                  );
-                })()
-              ) : (
-                visibleNews.map((item) => (
-                  <div
-                    key={`${item.id || item.news_url}-${item.stock_ticker}`}
-                    className="w-full text-left p-3 rounded-lg bg-white border border-blue-500/20 hover:border-blue-300 transition-colors"
-                  >
-                    <div className="flex items-center justify-between">
-                      <p className="font-medium text-gray-900">{item.title}</p>
-                      <Badge variant="outline" className="text-xs">
-                        {item.stock_ticker || "Portfolio"}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Why it matters: this update affects exposure and near-term
-                      decision framing.
-                    </p>
-                    <div className="mt-3 flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs"
-                        onClick={() =>
-                          sendPrompt(
-                            `Analyze this news for my holdings: ${item.title} (${item.stock_ticker || "portfolio"})`,
-                            { submit: true },
-                          )
-                        }
-                      >
-                        <MessageCircleQuestion className="w-3 h-3 mr-1" />
-                        Ask
-                      </Button>
-                      <a
-                        href={item.news_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                      >
-                        <ExternalLink className="w-3 h-3 mr-1" />
-                        Source
-                      </a>
                     </div>
                   </div>
                 ))
-              )
             ) : (
               <div className="rounded-lg bg-white border border-blue-500/20 p-3 text-sm text-gray-700 space-y-2">
                 <p>No live news loaded yet.</p>
@@ -1229,16 +1182,6 @@ export function Portfolio() {
                   tied to your current portfolio.
                 </p>
               </div>
-            )}
-            {portfolioNews.length > 4 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => setShowSources(true)}
-              >
-                More
-              </Button>
             )}
           </CardContent>
         </Card>
