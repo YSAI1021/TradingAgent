@@ -81,6 +81,8 @@ type EquityThesisItem = {
   symbol: string;
   company: string;
   allocation: string;
+  stopLoss: string;
+  targetPrice: string;
   thesis: string;
   validity: string;
 };
@@ -92,6 +94,8 @@ const INITIAL_EQUITIES_BY_BUCKET: Record<BucketKey, EquityThesisItem[]> = {
       symbol: "AAPL",
       company: "Apple Inc.",
       allocation: "18%",
+      stopLoss: "230",
+      targetPrice: "320",
       thesis:
         "Services growth and ecosystem retention continue to support quality compounding.",
       validity: "10 MO left",
@@ -101,6 +105,8 @@ const INITIAL_EQUITIES_BY_BUCKET: Record<BucketKey, EquityThesisItem[]> = {
       symbol: "MSFT",
       company: "Microsoft Corp.",
       allocation: "20%",
+      stopLoss: "380",
+      targetPrice: "520",
       thesis:
         "Cloud and enterprise AI monetization remain the core durable growth engine.",
       validity: "12 MO left",
@@ -110,6 +116,8 @@ const INITIAL_EQUITIES_BY_BUCKET: Record<BucketKey, EquityThesisItem[]> = {
       symbol: "XOM",
       company: "Exxon Mobil",
       allocation: "8%",
+      stopLoss: "95",
+      targetPrice: "140",
       thesis: "Cash flow and capital discipline support downside resilience in energy cycles.",
       validity: "Review in 4 MO",
     },
@@ -120,6 +128,8 @@ const INITIAL_EQUITIES_BY_BUCKET: Record<BucketKey, EquityThesisItem[]> = {
       symbol: "O",
       company: "Realty Income",
       allocation: "6%",
+      stopLoss: "45",
+      targetPrice: "70",
       thesis: "Income and defensiveness with monthly dividend stability.",
       validity: "Perpetual",
     },
@@ -130,6 +140,8 @@ const INITIAL_EQUITIES_BY_BUCKET: Record<BucketKey, EquityThesisItem[]> = {
       symbol: "BTC",
       company: "Bitcoin",
       allocation: "3%",
+      stopLoss: "52000",
+      targetPrice: "95000",
       thesis: "Long-duration optionality with strict position-size guardrails.",
       validity: "Review quarterly",
     },
@@ -141,6 +153,8 @@ type EquityDraft = {
   symbol: string;
   company: string;
   allocation: string;
+  stopLoss: string;
+  targetPrice: string;
   thesis: string;
   validity: string;
 };
@@ -150,6 +164,8 @@ const EMPTY_EQUITY_DRAFT: EquityDraft = {
   symbol: "",
   company: "",
   allocation: "",
+  stopLoss: "",
+  targetPrice: "",
   thesis: "",
   validity: "",
 };
@@ -193,7 +209,9 @@ function mapEquitiesToBuckets(rows: ThesisEquity[]): Record<BucketKey, EquityThe
       id: row.id,
       symbol: row.symbol,
       company: row.company,
-      allocation: row.allocation,
+      allocation: row.allocation || "",
+      stopLoss: row.stopLoss || "",
+      targetPrice: row.targetPrice || "",
       thesis: row.thesis,
       validity: row.validity,
     });
@@ -258,7 +276,7 @@ export function Thesis() {
   }
 
   const askAboutAsset = (item: EquityThesisItem) => {
-    const prompt = `Review this asset thesis and provide:\n- Key risks + what would invalidate it\n- Suggested improvements (more specific triggers/metrics)\n- Position sizing / allocation sanity check\n\nAsset: ${item.symbol} (${item.company})\nAllocation: ${item.allocation}\nValidity: ${item.validity}\nThesis: ${item.thesis}`
+    const prompt = `Review this asset thesis and provide:\n- Key risks + what would invalidate it\n- Suggested improvements (more specific triggers/metrics)\n- Allocation sanity check\n- Whether my price triggers are sensible (stop loss / target)\n\nAsset: ${item.symbol} (${item.company})\nTarget Allocation: ${item.allocation || "—"}\nStop Loss: ${item.stopLoss || "—"}\nTarget Price: ${item.targetPrice || "—"}\nValidity: ${item.validity}\nThesis: ${item.thesis}`
     sendPrompt(prompt, { submit: true })
   }
 
@@ -338,25 +356,36 @@ export function Thesis() {
     new Date(base.getFullYear(), base.getMonth() + months, base.getDate());
   const formatDate = (d: Date) =>
     d.toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
+  const getLogicBaseDate = () => {
+    // Use a fixed start date for the "Logic Valid Until" slider: Mar 1, 2026.
+    return new Date(2026, 2, 1);
+  };
   const parseMonthsFromValidity = (value: string) => {
     const raw = String(value || "").trim();
     const mo = raw.match(/(\d+)\s*mo/i);
-    if (mo) return clamp(parseInt(mo[1], 10) || 6, 1, 36);
+    if (mo) return clamp(parseInt(mo[1], 10) || 0, 0, 36);
     const ts = Date.parse(raw);
     if (!Number.isNaN(ts)) {
-      const now = new Date();
+      const base = getLogicBaseDate();
       const end = new Date(ts);
       const months =
-        (end.getFullYear() - now.getFullYear()) * 12 + (end.getMonth() - now.getMonth());
-      return clamp(months || 6, 1, 36);
+        (end.getFullYear() - base.getFullYear()) * 12 + (end.getMonth() - base.getMonth());
+      return clamp(months || 0, 0, 36);
     }
-    return 6;
+    return 0;
   };
 
   const [expiryMonths, setExpiryMonths] = useState<number>(6);
   useEffect(() => {
     if (!equityDialogOpen) return;
-    setExpiryMonths(parseMonthsFromValidity(equityDraft.validity));
+    const months = parseMonthsFromValidity(equityDraft.validity);
+    setExpiryMonths(months);
+    // If the slider shows a computed date but `validity` is blank (new thesis),
+    // prefill validity so Save works without forcing the user to touch the slider.
+    if (!equityDraft.validity?.trim()) {
+      const until = addMonths(getLogicBaseDate(), months);
+      setEquityDraft((prev) => (prev.validity?.trim() ? prev : { ...prev, validity: formatDate(until) }));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [equityDialogOpen, equityDraft.id]);
 
@@ -502,6 +531,8 @@ export function Thesis() {
                   symbol: item.symbol,
                   company: item.company,
                   allocation: item.allocation,
+                  stopLoss: item.stopLoss,
+                  targetPrice: item.targetPrice,
                   thesis: item.thesis,
                   validity: item.validity,
                 }),
@@ -622,6 +653,7 @@ export function Thesis() {
 
   const openNewEquityDialog = () => {
     setEquityDraft(EMPTY_EQUITY_DRAFT);
+    setEquityError("");
     setEquityDialogOpen(true);
   };
 
@@ -629,14 +661,12 @@ export function Thesis() {
     const nextSymbol = value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
     const matched = symbolSuggestions.find((item) => item.symbol === nextSymbol);
     setEquityDraft((prev) => {
-      const prevSymbol = prev.symbol.trim().toUpperCase();
       const prevCompany = prev.company.trim();
-      const shouldAutofillCompany =
-        !prevCompany || prevCompany.toUpperCase() === prevSymbol || prevCompany === prev.symbol;
       return {
         ...prev,
         symbol: nextSymbol,
-        company: shouldAutofillCompany && matched?.company ? matched.company : prev.company,
+        // Keep company always in sync with selected symbol when we have a known mapping.
+        company: matched?.company ? matched.company : prevCompany ? prev.company : nextSymbol,
       };
     });
   };
@@ -647,20 +677,27 @@ export function Thesis() {
       symbol: item.symbol,
       company: item.company,
       allocation: item.allocation,
+      stopLoss: item.stopLoss,
+      targetPrice: item.targetPrice,
       thesis: item.thesis,
       validity: item.validity,
     });
+    setEquityError("");
     setEquityDialogOpen(true);
   };
 
   const saveEquity = async () => {
     const symbol = equityDraft.symbol.trim().toUpperCase();
     const company = equityDraft.company.trim();
-    const allocation = equityDraft.allocation.trim();
+    const allocationRaw = equityDraft.allocation.trim();
+    const allocation =
+      allocationRaw && !allocationRaw.endsWith("%") ? `${allocationRaw}%` : allocationRaw;
+    const stopLoss = equityDraft.stopLoss.trim();
+    const targetPrice = equityDraft.targetPrice.trim();
     const thesis = equityDraft.thesis.trim();
     const validity = equityDraft.validity.trim();
-    if (!symbol || !company || !allocation || !thesis || !validity) {
-      setEquityError("Please complete Symbol, Company, Allocation, Thesis, and Validity before saving.");
+    if (!symbol || !company || !allocation || !stopLoss || !targetPrice || !thesis || !validity) {
+      setEquityError("Please complete Symbol, Company, Allocation, Stop Loss, Target Price, Thesis, and Validity before saving.");
       return;
     }
     const knownBucket = SYMBOL_BUCKET_LOOKUP.get(symbol);
@@ -681,6 +718,8 @@ export function Thesis() {
         symbol,
         company,
         allocation,
+        stopLoss,
+        targetPrice,
         thesis,
         validity,
       };
@@ -697,6 +736,8 @@ export function Thesis() {
           symbol: saved.symbol,
           company: saved.company,
           allocation: saved.allocation,
+          stopLoss: saved.stopLoss,
+          targetPrice: saved.targetPrice,
           thesis: saved.thesis,
           validity: saved.validity,
         };
@@ -742,11 +783,6 @@ export function Thesis() {
     }
   };
 
-  const disciplinedOverall =
-    dashboardStats != null &&
-    dashboardStats.totalDecisions >= 5 &&
-    dashboardStats.ruleAdherence >= 80;
-
   const formatTimelineDate = (iso: string) =>
     new Date(iso).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
 
@@ -768,21 +804,25 @@ export function Thesis() {
     <div className="p-8 max-w-7xl mx-auto space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {reviewCards.map((card) => (
-          <button
-            key={card.title}
-            type="button"
-            className="text-left w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl"
-            onClick={() => sendPrompt(card.prompt, { submit: true })}
-          >
-            <Card className="h-full hover:shadow-sm transition-shadow">
-              <CardContent className="pt-5">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">{card.title}</p>
-                <p className="mt-2 text-2xl font-semibold text-gray-900">{card.value}</p>
-                <p className="mt-1 text-sm text-gray-600">{card.subtitle}</p>
-                <p className="mt-3 text-xs text-blue-600 font-medium">Ask</p>
-              </CardContent>
-            </Card>
-          </button>
+          <Card key={card.title} className="h-full hover:shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-blue-500 rounded-xl">
+            <CardContent className="pt-5 h-full flex flex-col">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">{card.title}</p>
+              <p className="mt-2 text-2xl font-semibold text-gray-900">{card.value}</p>
+              <p className="mt-1 text-sm text-gray-600">{card.subtitle}</p>
+
+              <div className="mt-auto pt-4 flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-3 text-xs"
+                  onClick={() => sendPrompt(card.prompt, { submit: true })}
+                >
+                  Ask
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
@@ -863,9 +903,9 @@ export function Thesis() {
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="h-8 px-2 text-xs text-blue-600 hover:text-blue-700"
+                  className="h-8 px-3 text-xs"
                   onClick={() => askAboutRule(rule)}
                   title="Ask Copilot"
                 >
@@ -913,7 +953,7 @@ export function Thesis() {
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={openNewEquityDialog}>
                 <Plus className="w-4 h-4 mr-1" />
-                Add
+                Add Thesis
               </Button>
               <Button
                 type="button"
@@ -972,6 +1012,9 @@ export function Thesis() {
                   <div className="text-right">
                     <p className="text-sm font-medium text-gray-900">{item.allocation}</p>
                     <p className="text-xs text-gray-500">
+                      Stop: ${item.stopLoss || "—"} · Target: ${item.targetPrice || "—"}
+                    </p>
+                    <p className="text-xs text-gray-500">
                       {quotes[item.symbol]?.price
                         ? `$${quotes[item.symbol]?.price.toFixed(2)}`
                         : "Price loading..."}
@@ -1016,19 +1059,8 @@ export function Thesis() {
           <CardTitle className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <span>Decision Timeline</span>
-              {dashboardStats ? (
-                <Badge
-                  className={
-                    disciplinedOverall
-                      ? "bg-emerald-100 text-emerald-800 border-0"
-                      : "bg-gray-100 text-gray-700 border-0"
-                  }
-                >
-                  {disciplinedOverall ? "Disciplined" : "Building discipline"}
-                </Badge>
-              ) : null}
             </div>
-            <Button variant="ghost" size="sm" onClick={() => setTimelineExpanded((prev) => !prev)}>
+            <Button variant="ghost" size="sm" className="h-9 px-2 text-xs" onClick={() => setTimelineExpanded((prev) => !prev)}>
               {timelineExpanded ? (
                 <>
                   Collapse
@@ -1250,6 +1282,12 @@ export function Thesis() {
             ) : null}
           </DialogHeader>
 
+          {equityError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {equityError}
+            </div>
+          ) : null}
+
           <div className="grid gap-8 py-4 lg:grid-cols-2">
             {/* Left: Investment Conviction */}
             <div className="space-y-3">
@@ -1268,13 +1306,13 @@ export function Thesis() {
             <div className="space-y-6">
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Asset</p>
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <Select
                     value={equityDraft.symbol || undefined}
                     onValueChange={(value) => handleEquitySymbolChange(value)}
                     disabled={equityDraft.id != null}
                   >
-                    <SelectTrigger className="sm:col-span-1 h-12 text-base">
+                    <SelectTrigger className="h-12 w-full !py-1 !text-base md:!text-base">
                       <SelectValue placeholder="Symbol" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1289,7 +1327,8 @@ export function Thesis() {
                     placeholder="Company"
                     value={equityDraft.company}
                     onChange={(e) => setEquityDraft((prev) => ({ ...prev, company: e.target.value }))}
-                    className="sm:col-span-2 h-12 text-base"
+                    readOnly={Boolean(equityDraft.symbol.trim())}
+                    className="h-12 w-full !text-base md:!text-base read-only:opacity-100 read-only:cursor-default"
                   />
                 </div>
               </div>
@@ -1297,12 +1336,17 @@ export function Thesis() {
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Target Allocation</p>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Input
-                    placeholder="Target %"
-                    value={equityDraft.allocation}
-                    onChange={(e) => setEquityDraft((prev) => ({ ...prev, allocation: e.target.value }))}
-                    className="h-12 text-base"
-                  />
+                  <div className="relative">
+                    <Input
+                      placeholder="Target"
+                      value={equityDraft.allocation}
+                      onChange={(e) => setEquityDraft((prev) => ({ ...prev, allocation: e.target.value }))}
+                      className="h-12 text-base pr-8"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+                      %
+                    </span>
+                  </div>
                   <Input
                     placeholder="Current %"
                     value={draftAllocationPct != null ? `${draftAllocationPct.toFixed(1)}%` : "—"}
@@ -1314,18 +1358,49 @@ export function Thesis() {
 
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                  Actionable Price Triggers
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="relative">
+                    <Input
+                      placeholder="Stop Loss"
+                      value={equityDraft.stopLoss}
+                      onChange={(e) => setEquityDraft((prev) => ({ ...prev, stopLoss: e.target.value }))}
+                      className="h-12 text-base pl-8"
+                    />
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+                      $
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <Input
+                      placeholder="Target Price"
+                      value={equityDraft.targetPrice}
+                      onChange={(e) => setEquityDraft((prev) => ({ ...prev, targetPrice: e.target.value }))}
+                      className="h-12 text-base pl-8"
+                    />
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+                      $
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
                   Thesis Timeline &amp; Expiry
                 </p>
                 <div className="space-y-3">
                   <Slider
-                    min={1}
+                    className="[&_[data-slot=slider-range]]:bg-blue-600 [&_[data-slot=slider-thumb]]:bg-blue-600 [&_[data-slot=slider-thumb]]:ring-blue-200/60"
+                    min={0}
                     max={36}
                     step={1}
                     value={[expiryMonths]}
                     onValueChange={(v) => {
-                      const m = clamp(v?.[0] ?? 6, 1, 36);
+                      const m = clamp(v?.[0] ?? 0, 0, 36);
                       setExpiryMonths(m);
-                      const until = addMonths(new Date(), m);
+                      const until = addMonths(getLogicBaseDate(), m);
                       setEquityDraft((prev) => ({ ...prev, validity: formatDate(until) }));
                     }}
                   />
@@ -1333,7 +1408,7 @@ export function Thesis() {
                     Logic Valid Until:{" "}
                     {equityDraft.validity?.trim()
                       ? equityDraft.validity
-                      : formatDate(addMonths(new Date(), expiryMonths))}
+                      : formatDate(addMonths(getLogicBaseDate(), expiryMonths))}
                   </p>
                 </div>
               </div>

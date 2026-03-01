@@ -77,6 +77,8 @@ db.exec(`
     symbol TEXT NOT NULL,
     company TEXT NOT NULL,
     allocation TEXT NOT NULL,
+    stop_loss TEXT NOT NULL DEFAULT '',
+    target_price TEXT NOT NULL DEFAULT '',
     thesis TEXT NOT NULL,
     validity TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -281,6 +283,19 @@ const migrateDatabase = () => {
     addPostColumnIfMissing('sentiment', 'TEXT DEFAULT "neutral"')
     addPostColumnIfMissing('sentiment_confidence', 'REAL DEFAULT 0')
 
+    // Add new columns to thesis_equities when missing (older DBs)
+    const thesisEquityColumns = db.prepare('PRAGMA table_info(thesis_equities)').all()
+    const addThesisEquityColumnIfMissing = (name, type) => {
+      const hasColumn = thesisEquityColumns.some((col) => col.name === name)
+      if (!hasColumn) {
+        console.log(`Adding ${name} column to thesis_equities table...`)
+        db.exec(`ALTER TABLE thesis_equities ADD COLUMN ${name} ${type}`)
+      }
+    }
+
+    addThesisEquityColumnIfMissing('stop_loss', "TEXT NOT NULL DEFAULT ''")
+    addThesisEquityColumnIfMissing('target_price', "TEXT NOT NULL DEFAULT ''")
+
     // Ensure new tables exist for onboarding and thesis persistence in older DBs.
     db.exec(`
       CREATE TABLE IF NOT EXISTS user_onboarding_profiles (
@@ -306,6 +321,8 @@ const migrateDatabase = () => {
         symbol TEXT NOT NULL,
         company TEXT NOT NULL,
         allocation TEXT NOT NULL,
+        stop_loss TEXT NOT NULL DEFAULT '',
+        target_price TEXT NOT NULL DEFAULT '',
         thesis TEXT NOT NULL,
         validity TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

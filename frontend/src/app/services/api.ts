@@ -320,6 +320,8 @@ export interface ThesisEquity {
   symbol: string;
   company: string;
   allocation: string;
+  stopLoss: string;
+  targetPrice: string;
   thesis: string;
   validity: string;
   created_at?: string;

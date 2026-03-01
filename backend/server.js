@@ -1962,7 +1962,9 @@ app.get('/api/thesis/equities', authenticateToken, (req, res) => {
     const rows = db
       .prepare(
         `
-      SELECT id, bucket, symbol, company, allocation, thesis, validity, created_at, updated_at
+      SELECT id, bucket, symbol, company, allocation,
+             stop_loss as stopLoss, target_price as targetPrice,
+             thesis, validity, created_at, updated_at
       FROM thesis_equities
       WHERE user_id = ?
       ORDER BY created_at DESC
@@ -1983,13 +1985,15 @@ app.post('/api/thesis/equities', authenticateToken, (req, res) => {
     const symbol = typeof req.body.symbol === 'string' ? req.body.symbol.trim().toUpperCase() : ''
     const company = typeof req.body.company === 'string' ? req.body.company.trim() : ''
     const allocation = typeof req.body.allocation === 'string' ? req.body.allocation.trim() : ''
+    const stopLoss = typeof req.body.stopLoss === 'string' ? req.body.stopLoss.trim() : ''
+    const targetPrice = typeof req.body.targetPrice === 'string' ? req.body.targetPrice.trim() : ''
     const thesis = typeof req.body.thesis === 'string' ? req.body.thesis.trim() : ''
     const validity = typeof req.body.validity === 'string' ? req.body.validity.trim() : ''
 
     if (!THESIS_BUCKETS.has(bucket)) {
       return res.status(400).json({ error: 'Invalid bucket' })
     }
-    if (!symbol || !company || !allocation || !thesis || !validity) {
+    if (!symbol || !company || !allocation || !thesis || !validity || !stopLoss || !targetPrice) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
@@ -2008,26 +2012,28 @@ app.post('/api/thesis/equities', authenticateToken, (req, res) => {
       db.prepare(
         `
         UPDATE thesis_equities
-        SET company = ?, allocation = ?, thesis = ?, validity = ?, updated_at = CURRENT_TIMESTAMP
+        SET company = ?, allocation = ?, stop_loss = ?, target_price = ?, thesis = ?, validity = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND user_id = ?
       `
-      ).run(company, allocation, thesis, validity, existing.id, req.user.id)
+      ).run(company, allocation, stopLoss, targetPrice, thesis, validity, existing.id, req.user.id)
     } else {
       const insertResult = db
         .prepare(
           `
-        INSERT INTO thesis_equities (user_id, bucket, symbol, company, allocation, thesis, validity)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO thesis_equities (user_id, bucket, symbol, company, allocation, stop_loss, target_price, thesis, validity)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
         )
-        .run(req.user.id, bucket, symbol, company, allocation, thesis, validity)
+        .run(req.user.id, bucket, symbol, company, allocation, stopLoss, targetPrice, thesis, validity)
       rowId = insertResult.lastInsertRowid
     }
 
     const saved = db
       .prepare(
         `
-      SELECT id, bucket, symbol, company, allocation, thesis, validity, created_at, updated_at
+      SELECT id, bucket, symbol, company, allocation,
+             stop_loss as stopLoss, target_price as targetPrice,
+             thesis, validity, created_at, updated_at
       FROM thesis_equities
       WHERE id = ? AND user_id = ?
     `
@@ -2065,28 +2071,32 @@ app.put('/api/thesis/equities/:id', authenticateToken, (req, res) => {
     const symbol = typeof req.body.symbol === 'string' ? req.body.symbol.trim().toUpperCase() : ''
     const company = typeof req.body.company === 'string' ? req.body.company.trim() : ''
     const allocation = typeof req.body.allocation === 'string' ? req.body.allocation.trim() : ''
+    const stopLoss = typeof req.body.stopLoss === 'string' ? req.body.stopLoss.trim() : ''
+    const targetPrice = typeof req.body.targetPrice === 'string' ? req.body.targetPrice.trim() : ''
     const thesis = typeof req.body.thesis === 'string' ? req.body.thesis.trim() : ''
     const validity = typeof req.body.validity === 'string' ? req.body.validity.trim() : ''
 
     if (!THESIS_BUCKETS.has(bucket)) {
       return res.status(400).json({ error: 'Invalid bucket' })
     }
-    if (!symbol || !company || !allocation || !thesis || !validity) {
+    if (!symbol || !company || !allocation || !thesis || !validity || !stopLoss || !targetPrice) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
     db.prepare(
       `
       UPDATE thesis_equities
-      SET bucket = ?, symbol = ?, company = ?, allocation = ?, thesis = ?, validity = ?, updated_at = CURRENT_TIMESTAMP
+      SET bucket = ?, symbol = ?, company = ?, allocation = ?, stop_loss = ?, target_price = ?, thesis = ?, validity = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND user_id = ?
     `
-    ).run(bucket, symbol, company, allocation, thesis, validity, rowId, req.user.id)
+    ).run(bucket, symbol, company, allocation, stopLoss, targetPrice, thesis, validity, rowId, req.user.id)
 
     const updated = db
       .prepare(
         `
-      SELECT id, bucket, symbol, company, allocation, thesis, validity, created_at, updated_at
+      SELECT id, bucket, symbol, company, allocation,
+             stop_loss as stopLoss, target_price as targetPrice,
+             thesis, validity, created_at, updated_at
       FROM thesis_equities
       WHERE id = ? AND user_id = ?
     `
